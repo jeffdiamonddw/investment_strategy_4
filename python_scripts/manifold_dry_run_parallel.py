@@ -57,14 +57,14 @@ from pymoo.core.problem import Problem
 
 # --- 1. DRY RUN CONSTANTS ---
 ANNUAL_RISK_PERCENTILE = 1/13
-NUM_WORKERS = 4
-N_OFFSPRINGS = 4
+NUM_WORKERS = 94
+N_OFFSPRINGS = 94
 TIMEOUT = 180
-POP_SIZE = 2   # Minimal for testing
-GEN_COUNT =  7# Minimal for testing
-EVAL_FILE = "s3://jdinvestment/new_evaluations_test"
-HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_test"
-CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_test.pkl"
+POP_SIZE = 90   # Minimal for testing
+GEN_COUNT =  300# Minimal for testing
+EVAL_FILE = "s3://jdinvestment/new_evaluations_5"
+HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_5"
+CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_5.pkl"
 
 # --- 2. UTILITIES ---
 
