@@ -52,10 +52,10 @@ class RegimeSwitchingProblem(ElementwiseProblem):
         self.all_feature_names = data_features.band.values.tolist()
         
         # 10 Variables: 4 Mom PCs, 4 Qual PCs, Sigmoid Threshold, Sigmoid Beta
-        xl = np.array([-4.0, -2.0, -2.0, -2.0, -4.0, -2.0, -2.0, -2.0, -2.0, 0.1])
-        xu = np.array([ 8.0,  2.0,  2.0,  2.0,  8.0,  2.0,  2.0,  2.0,  4.0, 10.0])
+        xl = np.array([-4.0, -2.0, -2.0, -2.0, -4.0, -2.0, -2.0, -2.0, -2.0, 0.1, -1, -1, -1, -1, -1, -1])
+        xu = np.array([ 8.0,  2.0,  2.0,  2.0,  8.0,  2.0,  2.0,  2.0,  4.0, 10.0,-1, -1, -1, -1, -1, -1])
         
-        super().__init__(n_var=10, n_obj=3, xl=xl, xu=xu)
+        super().__init__(n_var=16, n_obj=5, xl=xl, xu=xu)
 
     def _evaluate(self, x, out, *args, **kwargs):
         x_numeric = x.X if hasattr(x, "X") else x
@@ -76,10 +76,13 @@ class RegimeSwitchingProblem(ElementwiseProblem):
 
         opt_threshold = x_numeric[8]
         opt_beta = x_numeric[9]
+        mom_decay = x_numeric[10]
+        qual_decay = x_numeric[11]
+        macro_weights = x_numeric[12:16]/sum(abs(x_numeric[12:16]))
 
         # Standard simulation calls
-        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, .1, .1,'crash', sim_id, session = session)
-        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, .1, .1, 'boom', sim_id, session = session)
+        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, mom_decay, qual_decay, macro_weights, 'crash', sim_id, session = session)
+        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, mom_decay, qual_decay, macro_weights, 'boom', sim_id, session = session)
         
         df_sim = pd.concat([df_h_crash, df_h_boom]).reset_index(drop=True)
         if df_sim.empty:
@@ -119,20 +122,19 @@ class RegimeSwitchingProblem(ElementwiseProblem):
 
         out["F"] = [f1, f2, f3, -f4, -f5]
 
-    def run_blended_sim(self, w_mom_vals, w_qual_vals, threshold, beta, mom_decay, qual_decay, period_key, sim_id, session = None):
+    def run_blended_sim(self, w_mom_vals, w_qual_vals, threshold, beta, mom_decay, qual_decay, macro_weights, period_key, sim_id, session = None):
         period = self.training_periods[period_key]
-        m = self.df_macro.loc[period['train_start_date']:period['end_date']]
-        if m.empty: return 999999999
-            
-        fear = m['fear_factor']
         
-        s_quality_weight = 1 / (1 + np.exp(-beta * (fear- threshold)))
+        
+        s_risk_aversion = self.df_macro.loc[period['train_start_date']:period['end_date']].dot(macro_weights).rename("risk_aversion")   
+        
+        
+        s_quality_weight = 1 / (1 + np.exp(-beta * (s_risk_aversion - threshold)))
         mom_num_periods = np.array([int(col.split('_')[-1][:-1]) for col in self.mom_kit['columns']])
         qual_num_periods = np.array([int(col.split('_')[-1][:-1]) for col in self.qual_kit['columns']])
-        df_mom_decay = pd.DataFrame(np.exp(- mom_decay * (fear.mean() - fear).values[:, None] * mom_num_periods), index=fear.index, columns = self.mom_kit['columns'])
-        #df_mom_decay = df_mom_decay.div(df_mom_decay.sum(axis=1).replace(0, 1), axis=0)
-        df_qual_decay = pd.DataFrame(np.exp(- qual_decay * (fear.mean() - fear).values[:, None] * qual_num_periods), index=fear.index, columns = self.qual_kit['columns'])
-        #df_qual_decay = df_qual_decay.div(df_qual_decay.sum(axis=1).replace(0, 1), axis=0)
+        df_mom_decay = pd.DataFrame(np.exp(- mom_decay * (s_risk_aversion.mean() - s_risk_aversion).values[:, None] * mom_num_periods), index=s_risk_aversion.index, columns = self.mom_kit['columns'])
+        df_qual_decay = pd.DataFrame(np.exp(- qual_decay * (s_risk_aversion.mean() - s_risk_aversion).values[:, None] * qual_num_periods), index=s_risk_aversion.index, columns = self.qual_kit['columns'])
+        
         
         w_dict = {}
         df_mom = pd.DataFrame({self.mom_kit['columns'][j]: [w_mom_vals[j]] for j in range(len(w_mom_vals))})

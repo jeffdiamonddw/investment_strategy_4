@@ -64,7 +64,7 @@ POP_SIZE = 4   # Minimal for testing
 GEN_COUNT =  300# Minimal for testing
 EVAL_FILE = "s3://jdinvestment/new_evaluations_6"
 HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_6"
-CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_728.pkl"
+CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_736.pkl"
 
 # --- 2. UTILITIES ---
 
@@ -104,9 +104,9 @@ class RobustParallelManager(Problem):
 
         # 3. SINGLE Pymoo Initialization (Defining the Contract)
         # This replaces BOTH previous super() calls with the correct bounds
-        super().__init__(n_var=10, n_obj=5, n_constr=0, 
-                        xl=np.array([-2, -2, -2, -2, -2, -2, -2, -2, 0.1, 0.5]), 
-                        xu=np.array([2, 2, 2, 2, 2, 2, 2, 2, 0.9, 2.0]))
+        super().__init__(n_var=16, n_obj=5, n_constr=0, 
+                        xl=np.array([-2, -2, -2, -2, -2, -2, -2, -2, 0.1, 0.5, -1, -1, -1, -1, -1, -1]), 
+                        xu=np.array([2, 2, 2, 2, 2, 2, 2, 2, 0.9, 2.0, 1, 1, 1, 1, 1, 1]))
 
     def _spawn_workers(self):
         """Spins up persistent worker processes."""
@@ -424,9 +424,9 @@ class TripleThreatProblem(ElementwiseProblem):
         self.base = RegimeSwitchingProblem(m_kit, q_kit, df_macro, data_features, None, 
                                         df_price, params, training_periods, holdings_file)
         
-        super().__init__(n_var=10, n_obj=5, n_constr=0, 
-                        xl=np.array([-2, -2, -2, -2, -2, -2, -2, -2, 0.1, 0.5]), 
-                        xu=np.array([2, 2, 2, 2, 2, 2, 2, 2, 0.9, 2.0]))
+        super().__init__(n_var=16, n_obj=5, n_constr=0, 
+                        xl=np.array([-2, -2, -2, -2, -2, -2, -2, -2, 0.1, 0.5, -1, -1, -1 ,-1, -1, -1]), 
+                        xu=np.array([2, 2, 2, 2, 2, 2, 2, 2, 0.9, 2.0, 1, 1, 1, 1, 1, 1]))
 
 
     def __getstate__(self):
@@ -463,10 +463,13 @@ class TripleThreatProblem(ElementwiseProblem):
 
         opt_threshold = x_numeric[8]
         opt_beta = x_numeric[9]
+        mom_decay = x_numeric[10]
+        qual_decay = x_numeric[11]
+        macro_weights = x_numeric[12:16]/sum(abs(x_numeric[12:16]))
 
         # SuppressOutput is removed here so you see the engine progress
-        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta,0, 0, 'crash', sim_id)
-        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, 0, 0, 'boom', sim_id)
+        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, mom_decay, qual_decay, macro_weights, 'crash', sim_id)
+        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, mom_decay, qual_decay, macro_weights, 'boom', sim_id)
         
         df_sim = pd.concat([df_h_crash, df_h_boom]).reset_index(drop=True)
         if df_sim.empty:
@@ -523,10 +526,10 @@ def main():
     data_features = xr.concat([_data_features, xr.concat([da_mom_gic, da_qual_gic], dim='band')], dim='symbol')
     df_price = da_mom.sel(band='price_end').to_pandas()
     
-    df_macro = pd.read_csv("simulation_data/macro_indicators.csv", index_col=0)
+    df_macro = pd.read_csv("simulation_data/macro_signals.csv", index_col=0)
     df_macro.index = pd.to_datetime(df_macro.index)
     
-    mapping = {'VIX': 'VIX_z', 'FED_RATE': 'FED_RATE_z', 'BOND_VOL': 'BOND_VOL_z'}
+    mapping = {'VIX_RATIO_SMOOTH': 'vix_z', 'YIELD_SPREAD_SMOOTH': 'yield_spread_z', 'HY_SPREAD_SMOOTH': 'hy_spread_z', 'FED_RATE_SMOOTH': 'fed_z'}
     for csv_col, engine_key in mapping.items():
         if csv_col in df_macro.columns:
             rolling_mean = df_macro[csv_col].rolling(window=252, min_periods=1).mean()
@@ -534,10 +537,10 @@ def main():
             df_macro[engine_key] = (df_macro[csv_col] - rolling_mean) / rolling_std.replace(0, 1)
 
     
-    df_macro.loc[:, 'composite_z'] = df_macro.loc[:, [col for col in df_macro.columns if col.endswith('_z')]].mean(1)
-    df_macro.loc[:, 'fear_factor'] = (df_macro.composite_z - df_macro.composite_z.min())/(df_macro.composite_z.max() - df_macro.composite_z.min())
-
-
+    
+    dates = sorted(list(set(df_macro.index).intersection(df_price.columns)))
+    df_macro = df_macro.loc[dates, [col for col in df_macro.columns if col.endswith('z')]]
+    
     params = {
         'principal': [327000, 60000, 21000], 'max_frac': .05, 'feature_horizon_weeks': 104,
         'min_price': 5, 'trade_fee': 7, 'objective_sensitivity': 0.144, 'obj_threshold': 0,
@@ -546,7 +549,7 @@ def main():
     
     training_periods = {
         'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
-        'crash': {'train_start_date': pd.to_datetime('Sep 1, 2005'), 'end_date': pd.to_datetime('Sep 1, 2012')}
+        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
     }
 
     print("Initializing problem kits...")
