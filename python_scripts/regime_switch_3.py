@@ -78,8 +78,8 @@ class RegimeSwitchingProblem(ElementwiseProblem):
         opt_beta = x_numeric[9]
 
         # Standard simulation calls
-        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, 'crash', sim_id, session = session)
-        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, 'boom', sim_id, session = session)
+        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, .1, .1,'crash', sim_id, session = session)
+        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, .1, .1, 'boom', sim_id, session = session)
         
         df_sim = pd.concat([df_h_crash, df_h_boom]).reset_index(drop=True)
         if df_sim.empty:
@@ -119,22 +119,29 @@ class RegimeSwitchingProblem(ElementwiseProblem):
 
         out["F"] = [f1, f2, f3, -f4, -f5]
 
-    def run_blended_sim(self, w_mom_vals, w_qual_vals, threshold, beta, period_key, sim_id, session = None):
+    def run_blended_sim(self, w_mom_vals, w_qual_vals, threshold, beta, mom_decay, qual_decay, period_key, sim_id, session = None):
         period = self.training_periods[period_key]
         m = self.df_macro.loc[period['train_start_date']:period['end_date']]
         if m.empty: return 999999999
             
-        fear = (m['VIX_z'] + m['FED_RATE_z'] + m['BOND_VOL_z'])
-        s_val = 1 / (1 + np.exp(-beta * (fear.mean() - threshold)))
+        fear = m['fear_factor']
         
-        w_dict = {feat: 0.0 for feat in self.all_feature_names}
-        d_mom = dict(zip(self.mom_kit['columns'], w_mom_vals))
-        d_qual = dict(zip(self.qual_kit['columns'], w_qual_vals))
+        s_quality_weight = 1 / (1 + np.exp(-beta * (fear- threshold)))
+        mom_num_periods = np.array([int(col.split('_')[-1][:-1]) for col in self.mom_kit['columns']])
+        qual_num_periods = np.array([int(col.split('_')[-1][:-1]) for col in self.qual_kit['columns']])
+        df_mom_decay = pd.DataFrame(np.exp(- mom_decay * (fear.mean() - fear).values[:, None] * mom_num_periods), index=fear.index, columns = self.mom_kit['columns'])
+        #df_mom_decay = df_mom_decay.div(df_mom_decay.sum(axis=1).replace(0, 1), axis=0)
+        df_qual_decay = pd.DataFrame(np.exp(- qual_decay * (fear.mean() - fear).values[:, None] * qual_num_periods), index=fear.index, columns = self.qual_kit['columns'])
+        #df_qual_decay = df_qual_decay.div(df_qual_decay.sum(axis=1).replace(0, 1), axis=0)
         
-        for f in self.mom_kit['columns']: w_dict[f] = (1 - s_val) * d_mom[f]
-        for f in self.qual_kit['columns']: w_dict[f] += s_val * d_qual[f]
+        w_dict = {}
+        df_mom = pd.DataFrame({self.mom_kit['columns'][j]: [w_mom_vals[j]] for j in range(len(w_mom_vals))})
+        df_qual = pd.DataFrame({self.qual_kit['columns'][j]: [w_qual_vals[j]] for j in range(len(w_mom_vals))})
         
-        h_raw, df_holdings = simulate(self.df_price, self.params, self.data_features, w_dict, period, self.data_gic, self.holdings_file, sim_id, session = session)
+        df_mom_weights = df_mom_decay.mul(df_mom.iloc[0], axis=1).mul(1 - s_quality_weight, axis=0)
+        df_qual_weights = df_qual_decay.mul(df_qual.iloc[0], axis=1).mul(s_quality_weight, axis=0)
+        df_weights = pd.concat([df_mom_weights, df_qual_weights], axis = 1)
+        h_raw, df_holdings = simulate(self.df_price, self.params, self.data_features, df_weights, period, self.data_gic, self.holdings_file, sim_id, session = session)
         
         # Log detailed output with sim_id for matching
         #df_h = pd.DataFrame(h_raw, columns=['date', 'symbol', 'price', 'capital'])
@@ -160,71 +167,3 @@ class RegimeSwitchingProblem(ElementwiseProblem):
 
 # --- MAIN EXECUTION ---
 
-if __name__ == "__main__":
-    # 1. Macro Data Setup
-    df_macro = pd.read_csv('simulation_data/macro_indicators.csv', parse_dates=['Date'])
-    df_macro = df_macro.set_index('Date').sort_index()
-    for col in ['VIX', 'FED_RATE', 'BOND_VOL']:
-        df_macro[f'{col}_z'] = (df_macro[col] - df_macro[col].mean()) / df_macro[col].std()
-
-    # 2. Environment Setup
-    stocks = sorted(list(set(pd.read_csv('strategy/stock_list_with_etfs.csv').symbol.values)))
-    data_price_momentum = xr.open_dataarray('simulation_data/price_and_dollar_returns.nc')
-    data_gic = xr.open_dataarray('simulation_data/gic_data.nc')
-    data_momentum = xr.concat([data_price_momentum[1:], data_gic[1:]], dim='symbol')
-    anchor = np.array(data_momentum.date).min()
-    data_eps = interpolate_to_4week_grid(xr.open_dataarray('simulation_data/eps.nc'), anchor)
-    data_etf_eps = interpolate_to_4week_grid(xr.open_dataarray('simulation_data/etf_eps.nc'), anchor)
-    data_eps = xr.concat([data_eps, data_etf_eps, get_gic_eps(data_gic)], dim='symbol', join='outer')
-    data_features = xr.concat([data_momentum, data_eps], dim='band', join='outer').sel(symbol=stocks + ['GIC'])
-    df_price = data_price_momentum.sel(band='price_end').to_pandas().loc[stocks]
-
-    params = {
-        'principal': [327000, 60000, 21000], 'max_frac': .05, 'feature_horizon_weeks': 104,
-        'min_price': 5, 'trade_fee': 7, 'objective_sensitivity': 0.144, 'obj_threshold': 0,
-        'start_date': pd.to_datetime('Jan 1, 2005'), 'end_date': pd.Timestamp.now()
-    }
-    training_periods = {
-        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
-        'crash': {'train_start_date': pd.to_datetime('Sep 1, 2005'), 'end_date': pd.to_datetime('Sep 1, 2012')}
-    }
-
-    # 3. Load History and Prepare PCA Kits
-    files = ['sim_results/mobo_results_1.csv', 'sim_results/mobo_results_2.csv', 
-             'sim_results/pca_refined_results.csv', 'sim_results/pca_warm_start_results.csv']
-    df_history = pd.concat([pd.read_csv(f) for f in files if os.path.exists(f)])
-    mom_cols = ['dollar_ret_1p', 'dollar_ret_6p', 'dollar_ret_13p', 'dollar_ret_26p']
-    qual_cols = ['avg_eps_1q', 'avg_eps_2q', 'avg_eps_4q', 'avg_eps_8q']
-    df_top = df_history.nsmallest(int(len(df_history) * 0.10), 'crash_eval').copy()
-    
-    def get_kit(df, cols):
-        s = StandardScaler().fit(df[cols])
-        p = PCA(n_components=4).fit(s.transform(df[cols]))
-        return {'scaler': s, 'pca': p, 'columns': cols}
-
-    m_kit, q_kit = get_kit(df_top, mom_cols), get_kit(df_top, qual_cols)
-
-    # 4. Warm Start Population
-    df_ws = df_history.nsmallest(100, 'crash_eval')
-    x_mom_pca = m_kit['pca'].transform(m_kit['scaler'].transform(df_ws[mom_cols]))
-    x_qual_pca = q_kit['pca'].transform(q_kit['scaler'].transform(df_ws[qual_cols]))
-    X_warm_start = np.hstack([x_mom_pca, x_qual_pca, np.tile([0.5, 1.0], (100, 1))])
-
-    # 5. Execute Optimization
-    problem = RegimeSwitchingProblem(m_kit, q_kit, df_macro, data_features, data_gic, df_price, params, training_periods)
-    algorithm = NSGA2(pop_size=100, sampling=Population.new("X", X_warm_start))
-    
-    print("--- Starting Dual-PCA Regime-Switching Optimization ---")
-    res = minimize(problem, algorithm, ('n_gen', 40), seed=1, verbose=True)
-
-    # 6. Save Optimized Final Population
-    final_mom = m_kit['scaler'].inverse_transform(m_kit['pca'].inverse_transform(res.X[:, 0:4]))
-    final_qual = q_kit['scaler'].inverse_transform(q_kit['pca'].inverse_transform(res.X[:, 4:8]))
-    
-    res_df = pd.DataFrame(final_mom, columns=mom_cols)
-    res_df[qual_cols] = final_qual
-    res_df['threshold'], res_df['beta'] = res.X[:, 8], res.X[:, 9]
-    res_df['crash_eval'], res_df['boom_eval'] = res.F[:, 0], -res.F[:, 1]
-    
-    res_df.to_csv("sim_results/regime_warm_start_final.csv", index=False)
-    print("Optimization Complete.")

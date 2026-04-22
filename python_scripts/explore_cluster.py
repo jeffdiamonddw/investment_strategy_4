@@ -193,7 +193,7 @@ def save_result_agnostic(df, path, session = None):
         
         
         
-def simulate(df_price, _params, data_features, feature_weights, training_period, data_gic, holdings_outfile, sim_id = None, session = None):
+def simulate(df_price, _params, data_features, df_weights, training_period, data_gic, holdings_outfile, sim_id = None, session = None):
     params = _params.copy()
     params.update(training_period)
     train_start_dates = [d for d in df_price if params['train_start_date'] <= d <= params['end_date'] - pd.Timedelta(weeks = params['feature_horizon_weeks'])]
@@ -209,6 +209,7 @@ def simulate(df_price, _params, data_features, feature_weights, training_period,
         current_price = df_price.loc[:, val_start_date].copy(); current_price.loc['GIC'] = 1
         budget = (holdings.values * pd.DataFrame(current_price).fillna(0).values).sum(axis = 0)
         df_features = data_features.sel(date = val_start_date).to_pandas().transpose()
+       
         holdings, _, _ = optimize(params, df_features, current_price, holdings, budget, feature_weights)
         holdings_out = pd.DataFrame((holdings.sum(axis = 1).values * current_price)).transpose().reset_index().rename(columns = {'index': 'date'})
         holdings_out.loc[:, 'sim_id'] = sim_id

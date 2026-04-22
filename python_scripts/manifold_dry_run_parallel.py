@@ -57,14 +57,14 @@ from pymoo.core.problem import Problem
 
 # --- 1. DRY RUN CONSTANTS ---
 ANNUAL_RISK_PERCENTILE = 1/13
-NUM_WORKERS = 94
+NUM_WORKERS = 1
 N_OFFSPRINGS = 94
 TIMEOUT = 180
-POP_SIZE = 90   # Minimal for testing
+POP_SIZE = 4   # Minimal for testing
 GEN_COUNT =  300# Minimal for testing
-EVAL_FILE = "s3://jdinvestment/new_evaluations_5"
-HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_5"
-CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_5.pkl"
+EVAL_FILE = "s3://jdinvestment/new_evaluations_6"
+HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_6"
+CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_728.pkl"
 
 # --- 2. UTILITIES ---
 
@@ -465,8 +465,8 @@ class TripleThreatProblem(ElementwiseProblem):
         opt_beta = x_numeric[9]
 
         # SuppressOutput is removed here so you see the engine progress
-        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, 'crash', sim_id)
-        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, 'boom', sim_id)
+        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta,0, 0, 'crash', sim_id)
+        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, 0, 0, 'boom', sim_id)
         
         df_sim = pd.concat([df_h_crash, df_h_boom]).reset_index(drop=True)
         if df_sim.empty:
@@ -525,12 +525,18 @@ def main():
     
     df_macro = pd.read_csv("simulation_data/macro_indicators.csv", index_col=0)
     df_macro.index = pd.to_datetime(df_macro.index)
+    
     mapping = {'VIX': 'VIX_z', 'FED_RATE': 'FED_RATE_z', 'BOND_VOL': 'BOND_VOL_z'}
     for csv_col, engine_key in mapping.items():
         if csv_col in df_macro.columns:
             rolling_mean = df_macro[csv_col].rolling(window=252, min_periods=1).mean()
             rolling_std = df_macro[csv_col].rolling(window=252, min_periods=1).std()
             df_macro[engine_key] = (df_macro[csv_col] - rolling_mean) / rolling_std.replace(0, 1)
+
+    
+    df_macro.loc[:, 'composite_z'] = df_macro.loc[:, [col for col in df_macro.columns if col.endswith('_z')]].mean(1)
+    df_macro.loc[:, 'fear_factor'] = (df_macro.composite_z - df_macro.composite_z.min())/(df_macro.composite_z.max() - df_macro.composite_z.min())
+
 
     params = {
         'principal': [327000, 60000, 21000], 'max_frac': .05, 'feature_horizon_weeks': 104,
