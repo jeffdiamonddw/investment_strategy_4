@@ -209,7 +209,7 @@ def simulate(df_price, _params, data_features, df_weights, training_period, data
         current_price = df_price.loc[:, val_start_date].copy(); current_price.loc['GIC'] = 1
         budget = (holdings.values * pd.DataFrame(current_price).fillna(0).values).sum(axis = 0)
         df_features = data_features.sel(date = val_start_date).to_pandas().transpose()
-       
+        feature_weights = dict(df_weights.loc[val_start_date])
         holdings, _, _ = optimize(params, df_features, current_price, holdings, budget, feature_weights)
         holdings_out = pd.DataFrame((holdings.sum(axis = 1).values * current_price)).transpose().reset_index().rename(columns = {'index': 'date'})
         holdings_out.loc[:, 'sim_id'] = sim_id

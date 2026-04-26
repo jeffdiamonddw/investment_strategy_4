@@ -1,12 +1,15 @@
 import awswrangler as wr
 import pandas as pd
+import time
 
 # Configuration
 bucket = "jdinvestment"
-folder_path = "new_holdings_history_5"
-database_name = "new_holdings_history_5"
-table_name = "new_holdings_history_5"
+folder_path = "new_evaluations_9"
+database_name = folder_path
+table_name = folder_path
 s3_path = f"s3://{bucket}/{folder_path}"
+
+t1 = time.time()
 
 # 1. Read all CSVs from the S3 folder into a single DataFrame
 # This automatically handles schema inference across all files
@@ -28,3 +31,6 @@ wr.s3.to_parquet(
 )
 
 print(f"Successfully converted CSVs to Parquet in {s3_path} and registered table '{table_name}'.")
+print("time: {}".format(time.time() - t1))
+
+zzz=1

@@ -4,6 +4,46 @@ Triple Threat Strategy: Dry Run Version
 2. MINIMAL GENERATIONS: Set to 2 to test the ask/tell loop transitions.
 3. OUTPUT VISIBLE: SuppressOutput is disabled to monitor engine prints.
 """
+
+import numpy as np
+
+# --- 1. DRY RUN CONSTANTS ---
+ANNUAL_RISK_PERCENTILE = 1/13
+NUM_WORKERS = 94
+N_OFFSPRINGS = 188
+TIMEOUT = 180
+POP_SIZE = 180   # Minimal for testing
+GEN_COUNT =  600# Minimal for testing
+EVAL_FILE = "s3://jdinvestment/new_evaluations_9"
+HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_9"
+CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_740.pkl"
+
+
+# Shared Search Space Configuration
+VAR_COUNT = 16
+OBJ_COUNT = 5
+
+# Indices: 0-7: PCA, 8: Threshold, 9: Beta, 10-11: Decay, 12-15: Macro Weights
+XL_DEFAULT = np.array([
+    -2, -2, -2, -2,  # Mom PCA
+    -2, -2, -2, -2,  # Qual PCA
+    -2.0,            # Threshold (Index 8: expanded from 0.1)
+    0.5,             # Beta (Index 9)
+    -1, -1,          # Decays
+    -1, -1, -1, -1   # Macro Weights
+])
+
+XU_DEFAULT = np.array([
+    2, 2, 2, 2,      # Mom PCA
+    2, 2, 2, 2,      # Qual PCA
+    2.0,             # Threshold (Index 8: expanded from 0.9)
+    15.0,            # Beta (Index 9: expanded from 2.0)
+    1, 1,            # Decays
+    1, 1, 1, 1       # Macro Weights
+])
+
+
+
 import os
 import boto3 
 import signal
@@ -55,16 +95,7 @@ import numpy as np
 import time
 from pymoo.core.problem import Problem
 
-# --- 1. DRY RUN CONSTANTS ---
-ANNUAL_RISK_PERCENTILE = 1/13
-NUM_WORKERS = 1
-N_OFFSPRINGS = 94
-TIMEOUT = 180
-POP_SIZE = 4   # Minimal for testing
-GEN_COUNT =  300# Minimal for testing
-EVAL_FILE = "s3://jdinvestment/new_evaluations_6"
-HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_6"
-CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_736.pkl"
+
 
 # --- 2. UTILITIES ---
 
@@ -86,7 +117,7 @@ class DummyProblem(Problem):
 # ---------------------------------------
 
 class RobustParallelManager(Problem):
-    def __init__(self, num_workers, timeout_sec, workhorse_cls, workhorse_args):
+    def __init__(self, num_workers, timeout_sec, workhorse_cls, workhorse_args, xl=XL_DEFAULT, xu=XU_DEFAULT):
         # 1. Store local attributes first
         self.num_workers = num_workers
         self.timeout_sec = timeout_sec
@@ -104,9 +135,7 @@ class RobustParallelManager(Problem):
 
         # 3. SINGLE Pymoo Initialization (Defining the Contract)
         # This replaces BOTH previous super() calls with the correct bounds
-        super().__init__(n_var=16, n_obj=5, n_constr=0, 
-                        xl=np.array([-2, -2, -2, -2, -2, -2, -2, -2, 0.1, 0.5, -1, -1, -1, -1, -1, -1]), 
-                        xu=np.array([2, 2, 2, 2, 2, 2, 2, 2, 0.9, 2.0, 1, 1, 1, 1, 1, 1]))
+        super().__init__(n_var=VAR_COUNT, n_obj=OBJ_COUNT, n_constr=0, xl=xl, xu=xu)
 
     def _spawn_workers(self):
         """Spins up persistent worker processes."""
@@ -409,7 +438,7 @@ def build_kit(df, cols):
 
 class TripleThreatProblem(ElementwiseProblem):
    
-    def __init__(self, m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, holdings_file):
+    def __init__(self, m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, holdings_file, xl=XL_DEFAULT, xu=XU_DEFAULT):
         # Store these so they exist for the __getstate__ / __setstate__ logic
         self.m_kit = m_kit
         self.q_kit = q_kit
@@ -424,9 +453,7 @@ class TripleThreatProblem(ElementwiseProblem):
         self.base = RegimeSwitchingProblem(m_kit, q_kit, df_macro, data_features, None, 
                                         df_price, params, training_periods, holdings_file)
         
-        super().__init__(n_var=16, n_obj=5, n_constr=0, 
-                        xl=np.array([-2, -2, -2, -2, -2, -2, -2, -2, 0.1, 0.5, -1, -1, -1 ,-1, -1, -1]), 
-                        xu=np.array([2, 2, 2, 2, 2, 2, 2, 2, 0.9, 2.0, 1, 1, 1, 1, 1, 1]))
+        super().__init__(n_var=VAR_COUNT, n_obj=OBJ_COUNT, n_constr=0, xl=xl, xu=xu)
 
 
     def __getstate__(self):
@@ -502,10 +529,17 @@ class TripleThreatProblem(ElementwiseProblem):
             'avg_eps_4q',
             'avg_eps_8q', 
             'threshold', 
-            'beta'
+            'beta',
+            'mom_decay',
+            'qual_decay',
+            'macro_weights_0',
+            'macro_weights_1',
+            'macro_weights_2',
+            'macro_weights_3'
+
         ]
         values = [sim_id, f1, f2, f3, f4, f5] + list(x)
-        df_out = pd.DataFrame({columns[i]: [values[i]] for i in range(16)})
+        df_out = pd.DataFrame({columns[i]: [values[i]] for i in range(len(columns))})
 
         save_result_agnostic(df_out, EVAL_FILE)
 
@@ -523,7 +557,8 @@ def main():
     _data_features = xr.concat([da_mom, da_qual], dim='band')
     da_mom_gic = xr.open_dataarray("simulation_data/gic_data.nc")
     da_qual_gic = get_gic_eps(da_mom_gic)
-    data_features = xr.concat([_data_features, xr.concat([da_mom_gic, da_qual_gic], dim='band')], dim='symbol')
+    data_features = xr.concat([_data_features, xr.concat([da_mom_gic, da_qual_gic], dim='band')], dim='symbol').drop_sel(band = 'price_end')
+    
     df_price = da_mom.sel(band='price_end').to_pandas()
     
     df_macro = pd.read_csv("simulation_data/macro_signals.csv", index_col=0)

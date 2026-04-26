@@ -34,7 +34,7 @@ from explore_cluster import (
 # --- REGIME-SWITCHING PROBLEM CLASS ---
 
 class RegimeSwitchingProblem(ElementwiseProblem):
-    def __init__(self, mom_kit, qual_kit, df_macro, data_features, data_gic, df_price, params, training_periods, holdings_file):
+    def __init__(self, mom_kit, qual_kit, df_macro, data_features, data_gic, df_price, params, training_periods, holdings_file, xl=None, xu=None):
         self.mom_kit = mom_kit
         self.qual_kit = qual_kit
         self.df_macro = df_macro
@@ -51,9 +51,6 @@ class RegimeSwitchingProblem(ElementwiseProblem):
         
         self.all_feature_names = data_features.band.values.tolist()
         
-        # 10 Variables: 4 Mom PCs, 4 Qual PCs, Sigmoid Threshold, Sigmoid Beta
-        xl = np.array([-4.0, -2.0, -2.0, -2.0, -4.0, -2.0, -2.0, -2.0, -2.0, 0.1, -1, -1, -1, -1, -1, -1])
-        xu = np.array([ 8.0,  2.0,  2.0,  2.0,  8.0,  2.0,  2.0,  2.0,  4.0, 10.0,-1, -1, -1, -1, -1, -1])
         
         super().__init__(n_var=16, n_obj=5, xl=xl, xu=xu)
 
