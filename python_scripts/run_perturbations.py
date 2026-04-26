@@ -28,6 +28,7 @@ BATCH_REQUIREMENT = 90
 TIMEOUT = 180
 EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_1"
 HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_1"
+PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_1"
 
 
 # Indices: 0-7: PCA, 8: Threshold, 9: Beta, 10-11: Decay, 12-15: Macro Weights
@@ -52,29 +53,53 @@ XU_DEFAULT = np.array([
 
 def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
     """
-    Takes Pareto seeds and wiggles them to create a dense cloud of evaluations.
+    Generates a dense cloud of evaluations.
+    Returns:
+    - X_perturbed: (n_required, 10) array for evaluation.
+    - df_meta: DataFrame containing original columns, sim_id, and parent_id.
     """
-    # Identify the 10 variable columns (p1-p8, threshold, beta)
-    # Adjust names if your CSV uses different headers
+    # 1. Identify variable columns and parent IDs from seed data
+    # Decision variables are the first 10 columns
     var_cols = df_seeds.columns[:10] 
     seeds = df_seeds[var_cols].values
+    parent_ids = df_seeds['sim_id'].values 
     
     n_seeds = len(seeds)
     perturbations_per_seed = int(np.ceil(n_required / n_seeds))
     
-    all_perturbed = []
+    all_x = []
+    all_rows = []
+
     ranges = xu - xl
 
-    for seed in seeds:
-        # Create a cluster around each seed
+    for i, seed in enumerate(seeds):
+        # Create a cluster around the seed island
         noise = np.random.normal(0, noise_scale * ranges, (perturbations_per_seed, len(seed)))
         perturbed_set = seed + noise
-        # Clip to ensure they stay within physical bounds
-        perturbed_set = np.clip(perturbed_set, xl, xu)
-        all_perturbed.append(perturbed_set)
         
-    X_perturbed = np.vstack(all_perturbed)[:n_required]
-    return X_perturbed
+        # Physical bounds clipping
+        perturbed_set = np.clip(perturbed_set, xl, xu)
+        
+        current_parent = parent_ids[i]
+        
+        for x_numeric in perturbed_set:
+            # Calculate the unique sim_id for this specific perturbation
+            new_sim_id = abs(hash(tuple(x_numeric))) % (10**10)
+            
+            # Prepare the row matching the original dataframe structure
+            # We use the seed's column structure but update vars and IDs
+            row_data = {col: val for col, val in zip(var_cols, x_numeric)}
+            row_data['sim_id'] = new_sim_id
+            row_data['parent_id'] = current_parent
+            
+            all_x.append(x_numeric)
+            all_rows.append(row_data)
+            
+    # Truncate to exact requirement
+    X_perturbed = np.array(all_x)[:n_required]
+    df_meta = pd.DataFrame(all_rows)[:n_required]
+    
+    return X_perturbed, df_meta
 
 STOP_SIGNAL = "STOP"
 
@@ -222,7 +247,9 @@ def main():
     df_pareto = df_ranked.loc[df_ranked['ranl']==0]
     
     # Generate 10,000 samples around Pareto seeds
-    X_all = generate_perturbations(df_pareto, PERTURB_COUNT, XL_DEFAULT, XU_DEFAULT, NOISE_STRENGTH)
+    X_all, df_perturb = generate_perturbations(df_pareto, PERTURB_COUNT, XL_DEFAULT, XU_DEFAULT, NOISE_STRENGTH)
+    df_perturb.to_csv("{}/perturbations.csv".format(PERTURBATION_FOLDER))
+    
     
     problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE)
     manager = HighThroughputBatchManager(num_workers = NUM_WORKERS, timeout_sec =TIMEOUT, workhorse_cls = TripleThreatProblem, workhorse_ags = problem_args, target_completion = BATCH_REQUIREMENT)
