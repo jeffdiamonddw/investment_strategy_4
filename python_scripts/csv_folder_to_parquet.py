@@ -4,7 +4,7 @@ import time
 
 # Configuration
 bucket = "jdinvestment"
-folder_path = "new_evaluations_9"
+folder_path = "perturbation_evaluations_5"
 database_name = folder_path
 table_name = folder_path
 s3_path = f"s3://{bucket}/{folder_path}"

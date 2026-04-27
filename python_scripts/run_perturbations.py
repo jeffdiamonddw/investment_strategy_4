@@ -22,13 +22,13 @@ from manifold_dry_run_parallel import *
 # --- CONFIGURATION FOR PERTURBATION ---
 PARETO_INPUT_FILE = "analysis/top_ranked.csv" # The file you extracted
 NUM_PERTURBATIONS = 10000
-NOISE_SCALE = 0.05  # 5% COEFF VAR
+NOISE_SCALE = 0.01  # 5% COEFF VAR
 NUM_WORKERS = 94
 BATCH_REQUIREMENT = 90
 TIMEOUT = 180
-EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_4"
-HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_4"
-PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_4"
+EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_5"
+HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_5"
+PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_5"
 
 
 # Indices: 0-7: PCA, 8: Threshold, 9: Beta, 10-11: Decay, 12-15: Macro Weights

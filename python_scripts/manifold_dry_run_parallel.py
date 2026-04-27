@@ -514,6 +514,7 @@ class TripleThreatProblem(ElementwiseProblem):
         f3 = np.maximum(0, df_2022['total_value'].iloc[0] - df_2022['total_value']).sum() if not df_2022.empty else 9999999
         f4 = df_sim.iloc[-1]['total_value']
         f5 = df_sim['total_value'].pct_change().dropna().quantile(ANNUAL_RISK_PERCENTILE)
+        f6 = df_h_crash.iloc[-1][ticker_cols].sum()
         columns = [
             'sim_id',
             'f1_2008',
@@ -521,6 +522,7 @@ class TripleThreatProblem(ElementwiseProblem):
             'f3_2022',
             'f4_terminal',
             'f5_annual_worst',
+            'f6_2008_terminal',
             'dollar_ret_1p',
             'dollar_ret_6p',
             'dollar_ret_13p',
@@ -539,13 +541,13 @@ class TripleThreatProblem(ElementwiseProblem):
             'macro_weights_3'
 
         ]
-        values = [sim_id, f1, f2, f3, f4, f5] + list(x)
+        values = [sim_id, f1, f2, f3, f4, f5, f6] + list(x)
         df_out = pd.DataFrame({columns[i]: [values[i]] for i in range(len(columns))})
 
         save_result_agnostic(df_out, self.eval_file)
 
 
-        out["F"] = [f1, f2, f3, -f4, -f5]
+        out["F"] = [f1, f2, f3, -f4, -f5, -f6]
         print('time: {}'.format(time.time() - t1))
 
 def main():
