@@ -22,13 +22,13 @@ from manifold_dry_run_parallel import *
 # --- CONFIGURATION FOR PERTURBATION ---
 PARETO_INPUT_FILE = "analysis/top_ranked.csv" # The file you extracted
 NUM_PERTURBATIONS = 10000
-NOISE_STRENGTH = 0.05  # 5% of the variable range
-NUM_WORKERS = 1
-BATCH_REQUIREMENT = 1
+NOISE_SCALE = 0.05  # 5% COEFF VAR
+NUM_WORKERS = 94
+BATCH_REQUIREMENT = 90
 TIMEOUT = 180
-EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_2"
-HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_2"
-PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_2"
+EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_3"
+HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_3"
+PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_3"
 
 
 # Indices: 0-7: PCA, 8: Threshold, 9: Beta, 10-11: Decay, 12-15: Macro Weights
@@ -70,16 +70,20 @@ VAR_COLS = [
 ]
 
 
+import numpy as np
+import pandas as pd
+
 def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
     """
-    Generates a dense cloud of evaluations.
-    Returns:
-    - X_perturbed: (n_required, 10) array for evaluation.
-    - df_meta: DataFrame containing original columns, sim_id, and parent_id.
+    Generates perturbations where noise is scaled by the parent value (CV).
+    
+    Args:
+        df_seeds: DataFrame of Pareto solutions (the "islands").
+        n_required: Total number of evaluations to generate.
+        xl, xu: Lower and upper bounds for clipping.
+        noise_scale: The desired Coefficient of Variation (std / parent_value).
     """
-    # 1. Identify variable columns and parent IDs from seed data
-    # Decision variables are the first 10 columns
-    var_cols = VAR_COLS
+    var_cols = df_seeds.columns[:10] 
     seeds = df_seeds[var_cols].values
     parent_ids = df_seeds['sim_id'].values 
     
@@ -89,24 +93,26 @@ def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
     all_x = []
     all_rows = []
 
-    ranges = xu - xl
-
     for i, seed in enumerate(seeds):
-        # Create a cluster around the seed island
-        noise = np.random.normal(0, noise_scale * ranges, (perturbations_per_seed, len(seed)))
+        # Calculate standard deviation as a percentage of the parent value
+        # We use np.abs(seed) to ensure a positive scale for the normal distribution
+        # We add a tiny epsilon (1e-8) to prevent zero-noise if a parameter is exactly 0
+        local_std = noise_scale * (np.abs(seed) + 1e-8)
+        
+        # Generate the noise cluster using the local CV-based scale
+        noise = np.random.normal(0, local_std, (perturbations_per_seed, len(seed)))
         perturbed_set = seed + noise
         
-        # Physical bounds clipping
+        # Physical bounds clipping (ensure we don't drift outside the -2 to 2 or 0.1 to 2.0 range)
         perturbed_set = np.clip(perturbed_set, xl, xu)
         
         current_parent = parent_ids[i]
         
         for x_numeric in perturbed_set:
-            # Calculate the unique sim_id for this specific perturbation
+            # Unique sim_id for the perturbation
             new_sim_id = abs(hash(tuple(x_numeric))) % (10**10)
             
-            # Prepare the row matching the original dataframe structure
-            # We use the seed's column structure but update vars and IDs
+            # Construct metadata row
             row_data = {col: val for col, val in zip(var_cols, x_numeric)}
             row_data['sim_id'] = new_sim_id
             row_data['parent_id'] = current_parent
@@ -114,7 +120,7 @@ def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
             all_x.append(x_numeric)
             all_rows.append(row_data)
             
-    # Truncate to exact requirement
+    # Truncate to exact requirement and return
     X_perturbed = np.array(all_x)[:n_required]
     df_meta = pd.DataFrame(all_rows)[:n_required]
     
@@ -266,7 +272,7 @@ if __name__ == "__main__":
     df_pareto = df_ranked.loc[df_ranked['rank']==0]
     
     # Generate 10,000 samples around Pareto seeds
-    X_all, df_perturb = generate_perturbations(df_pareto,   NUM_PERTURBATIONS, XL_DEFAULT, XU_DEFAULT, NOISE_STRENGTH)
+    X_all, df_perturb = generate_perturbations(df_pareto,   NUM_PERTURBATIONS, XL_DEFAULT, XU_DEFAULT, NOISE_SCALE)
     df_perturb.to_csv("{}/perturbations.csv".format(PERTURBATION_FOLDER))
     
     
