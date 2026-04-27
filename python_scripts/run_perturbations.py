@@ -21,14 +21,14 @@ from manifold_dry_run_parallel import *
 
 # --- CONFIGURATION FOR PERTURBATION ---
 PARETO_INPUT_FILE = "analysis/top_ranked.csv" # The file you extracted
-PERTURB_COUNT = 10000
+NUM_PERTURBATIONS = 10000
 NOISE_STRENGTH = 0.05  # 5% of the variable range
-NUM_WORKERS = 94
-BATCH_REQUIREMENT = 90
+NUM_WORKERS = 1
+BATCH_REQUIREMENT = 1
 TIMEOUT = 180
-EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_1"
-HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_1"
-PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_1"
+EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_2"
+HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_2"
+PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_2"
 
 
 # Indices: 0-7: PCA, 8: Threshold, 9: Beta, 10-11: Decay, 12-15: Macro Weights
@@ -49,6 +49,25 @@ XU_DEFAULT = np.array([
     1, 1,            # Decays
     1, 1, 1, 1       # Macro Weights
 ])
+VAR_COLS = [
+
+            'dollar_ret_1p',
+            'dollar_ret_6p',
+            'dollar_ret_13p',
+            'dollar_ret_26p',
+            'avg_eps_1q',
+            'avg_eps_2q',
+            'avg_eps_4q',
+            'avg_eps_8q', 
+            'threshold', 
+            'beta',
+            'mom_decay',
+            'qual_decay',
+            'macro_weights_0',
+            'macro_weights_1',
+            'macro_weights_2',
+            'macro_weights_3'
+]
 
 
 def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
@@ -60,7 +79,7 @@ def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
     """
     # 1. Identify variable columns and parent IDs from seed data
     # Decision variables are the first 10 columns
-    var_cols = df_seeds.columns[:10] 
+    var_cols = VAR_COLS
     seeds = df_seeds[var_cols].values
     parent_ids = df_seeds['sim_id'].values 
     
@@ -197,7 +216,7 @@ class HighThroughputBatchManager(Problem):
 
 
 
-def main():
+if __name__ == "__main__":
     print("--- DRY RUN START ---")
     da_mom = xr.open_dataset("simulation_data/momentum.nc").to_array().squeeze()
     da_qual = xr.open_dataset("simulation_data/quality.nc").to_array().squeeze()
@@ -244,15 +263,15 @@ def main():
     q_kit = build_kit(df_elite, qual_cols)
 
     df_ranked = pd.read_csv(PARETO_INPUT_FILE)
-    df_pareto = df_ranked.loc[df_ranked['ranl']==0]
+    df_pareto = df_ranked.loc[df_ranked['rank']==0]
     
     # Generate 10,000 samples around Pareto seeds
-    X_all, df_perturb = generate_perturbations(df_pareto, PERTURB_COUNT, XL_DEFAULT, XU_DEFAULT, NOISE_STRENGTH)
+    X_all, df_perturb = generate_perturbations(df_pareto,   NUM_PERTURBATIONS, XL_DEFAULT, XU_DEFAULT, NOISE_STRENGTH)
     df_perturb.to_csv("{}/perturbations.csv".format(PERTURBATION_FOLDER))
     
     
-    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE)
-    manager = HighThroughputBatchManager(num_workers = NUM_WORKERS, timeout_sec =TIMEOUT, workhorse_cls = TripleThreatProblem, workhorse_ags = problem_args, target_completion = BATCH_REQUIREMENT)
+    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE, EVAL_FILE)
+    manager = HighThroughputBatchManager(num_workers = NUM_WORKERS, timeout_sec =TIMEOUT, workhorse_cls = TripleThreatProblem, workhorse_args = problem_args, target_completion = BATCH_REQUIREMENT)
     
     all_results = []
     task_pool = list(enumerate(X_all)) # List of (original_idx, x_vector)

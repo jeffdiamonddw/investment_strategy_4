@@ -438,7 +438,7 @@ def build_kit(df, cols):
 
 class TripleThreatProblem(ElementwiseProblem):
    
-    def __init__(self, m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, holdings_file, xl=XL_DEFAULT, xu=XU_DEFAULT):
+    def __init__(self, m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, holdings_file, eval_file, xl=XL_DEFAULT, xu=XU_DEFAULT):
         # Store these so they exist for the __getstate__ / __setstate__ logic
         self.m_kit = m_kit
         self.q_kit = q_kit
@@ -448,6 +448,7 @@ class TripleThreatProblem(ElementwiseProblem):
         self.params = params
         self.training_periods = training_periods
         self.holdings_file = holdings_file
+        self.eval_file = eval_file
         
         # Initialize the base engine
         self.base = RegimeSwitchingProblem(m_kit, q_kit, df_macro, data_features, None, 
@@ -541,7 +542,7 @@ class TripleThreatProblem(ElementwiseProblem):
         values = [sim_id, f1, f2, f3, f4, f5] + list(x)
         df_out = pd.DataFrame({columns[i]: [values[i]] for i in range(len(columns))})
 
-        save_result_agnostic(df_out, EVAL_FILE)
+        save_result_agnostic(df_out, self.eval_file)
 
 
         out["F"] = [f1, f2, f3, -f4, -f5]
