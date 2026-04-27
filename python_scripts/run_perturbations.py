@@ -26,9 +26,9 @@ NOISE_SCALE = 0.05  # 5% COEFF VAR
 NUM_WORKERS = 94
 BATCH_REQUIREMENT = 90
 TIMEOUT = 180
-EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_3"
-HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_3"
-PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_3"
+EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_4"
+HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_4"
+PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_4"
 
 
 # Indices: 0-7: PCA, 8: Threshold, 9: Beta, 10-11: Decay, 12-15: Macro Weights
@@ -83,7 +83,7 @@ def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
         xl, xu: Lower and upper bounds for clipping.
         noise_scale: The desired Coefficient of Variation (std / parent_value).
     """
-    var_cols = df_seeds.columns[:10] 
+    var_cols = VAR_COLS 
     seeds = df_seeds[var_cols].values
     parent_ids = df_seeds['sim_id'].values 
     
