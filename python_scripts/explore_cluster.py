@@ -193,7 +193,7 @@ def save_result_agnostic(df, path, session = None):
         
         
         
-def simulate(df_price, _params, data_features, df_weights, training_period, data_gic, holdings_outfile, sim_id = None, session = None):
+def simulate(df_price, _params, data_features, df_weights, training_period, holdings_outfile, sim_id = None, session = None):
     params = _params.copy()
     params.update(training_period)
     train_start_dates = [d for d in df_price if params['train_start_date'] <= d <= params['end_date'] - pd.Timedelta(weeks = params['feature_horizon_weeks'])]

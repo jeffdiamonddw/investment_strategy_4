@@ -34,12 +34,11 @@ from explore_cluster import (
 # --- REGIME-SWITCHING PROBLEM CLASS ---
 
 class RegimeSwitchingProblem(ElementwiseProblem):
-    def __init__(self, mom_kit, qual_kit, df_macro, data_features, data_gic, df_price, params, training_periods, holdings_file, xl=None, xu=None):
+    def __init__(self, mom_kit, qual_kit, df_macro, data_features, df_price, params, training_periods, holdings_file, xl=None, xu=None):
         self.mom_kit = mom_kit
         self.qual_kit = qual_kit
         self.df_macro = df_macro
         self.data_features = data_features
-        self.data_gic = data_gic
         self.df_price = df_price
         self.params = params
         self.training_periods = training_periods
@@ -140,7 +139,7 @@ class RegimeSwitchingProblem(ElementwiseProblem):
         df_mom_weights = df_mom_decay.mul(df_mom.iloc[0], axis=1).mul(1 - s_quality_weight, axis=0)
         df_qual_weights = df_qual_decay.mul(df_qual.iloc[0], axis=1).mul(s_quality_weight, axis=0)
         df_weights = pd.concat([df_mom_weights, df_qual_weights], axis = 1)
-        h_raw, df_holdings = simulate(self.df_price, self.params, self.data_features, df_weights, period, self.data_gic, self.holdings_file, sim_id, session = session)
+        h_raw, df_holdings = simulate(self.df_price, self.params, self.data_features, df_weights, period, self.holdings_file, sim_id, session = session)
         
         # Log detailed output with sim_id for matching
         #df_h = pd.DataFrame(h_raw, columns=['date', 'symbol', 'price', 'capital'])

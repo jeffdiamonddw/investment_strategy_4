@@ -9,7 +9,7 @@ import numpy as np
 
 # --- 1. DRY RUN CONSTANTS ---
 ANNUAL_RISK_PERCENTILE = 1/13
-NUM_WORKERS = 94
+NUM_WORKERS = 1
 N_OFFSPRINGS = 188
 TIMEOUT = 180
 POP_SIZE = 180   # Minimal for testing
@@ -451,7 +451,7 @@ class TripleThreatProblem(ElementwiseProblem):
         self.eval_file = eval_file
         
         # Initialize the base engine
-        self.base = RegimeSwitchingProblem(m_kit, q_kit, df_macro, data_features, None, 
+        self.base = RegimeSwitchingProblem(m_kit, q_kit, df_macro, data_features, 
                                         df_price, params, training_periods, holdings_file)
         
         super().__init__(n_var=VAR_COUNT, n_obj=OBJ_COUNT, n_constr=0, xl=xl, xu=xu)
@@ -599,14 +599,14 @@ def main():
     m_kit = build_kit(df_elite, mom_cols)
     q_kit = build_kit(df_elite, qual_cols)
 
-    problem = TripleThreatProblem(m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE)
+    problem = TripleThreatProblem(m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE, EVAL_FILE)
 
     # Attempt to load existing progress
     algorithm = load_checkpoint(CHECKPOINT_URI)
     
     # Pack the re-injection data for the problem
     # Note: Added HOLDINGS_FILE here to match your current __init__
-    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE)
+    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE, EVAL_FILE)
 
     if algorithm is None:
         print("Initial Startup: Building RANDOM population...")
