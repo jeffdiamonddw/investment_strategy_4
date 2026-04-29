@@ -5,9 +5,13 @@ import pandas as pd
 import xarray as xr
 import time
 from pymoo.core.problem import ElementwiseProblem
+from pymoo.algorithms.moo.nsga2 import NSGA2
+from pymoo.core.population import Population
+from scipy.spatial.distance import pdist, squareform
+import networkx as nx
 # Ensure these are imported from your local environment
 from explore_cluster import save_result_agnostic, simulate, get_gic_eps
-from manifold_dry_run_parallel import build_kit 
+from manifold_dry_run_parallel import build_kit, RobustParallelManager, load_checkpoint, save_checkpoint  
 
 
 STAR_FILE = 'analysis/stars.csv'
@@ -18,17 +22,18 @@ MACRO_FILE = "simulation_data/macro_signals.csv"
 MANIFOLD_FILE = "sim_results/manifold_triple_threat.csv"
 HOLDINGS_FOLDER = "s3://jdinvestment/pareto_nav_holdings_1"
 EVAL_FOLDER = "s3://jdinvestment/pareto_nav_eval_1"
+CHECKPOINT_URI= "s3://jdinvestment/checkpoints/pareto_nav_checkpoint_2"
+
+POP_SIZE = 3   # Minimal for testing
+GEN_COUNT =  300
+N_OFFSPRING = 3
+NUM_WORKERS = 3
+TIMEOUT = 180
+TARGET_COMPLETIONS = 2
 
 
 
-import numpy as np
-from scipy.spatial.distance import pdist, squareform
-import networkx as nx
 
-
-import numpy as np
-import pandas as pd
-from scipy.spatial.distance import pdist, squareform
 
 def get_greedy_path_indices(df, objective_cols):
     """
@@ -102,7 +107,7 @@ class ParetoNavigator(ElementwiseProblem):
     def __init__(self, df_stars, weight_columns, df_macro, 
                  mom_kit, qual_kit, data_features, df_price, params, 
                  training_periods, holdings_folder, eval_folder, 
-                 objective_functions_dict, objective_sense):
+                 objective_functions_dict, objective_sense, xl, xu):
         """
         17-Parameter Navigator [Jeff Diamond Analytics]
         
@@ -135,11 +140,9 @@ class ParetoNavigator(ElementwiseProblem):
         # 3. Internal State
         self.prev_target_pos = None
 
-        # 17 Pymoo Parameters (12 Temporal Encoder + 5 Spatial/Logic)
-        xl = np.array([0.01]*4 + [-2.0]*4 + [-1.0]*4 + [0.001, 0.1, -2.0, -1.0, 0.0])
-        xu = np.array([0.95]*4 + [2.0]*4 + [1.0]*4 + [1.5, 5.0, 2.0, 1.0, 0.5])
+        
 
-        super().__init__(n_var=17, n_obj=len(self.objective_sense), n_constr=0, xl=xl, xu=xu)
+        super().__init__(n_var=17, n_obj=len(objective_sense), n_constr=0, xl=xl, xu=xu)
 
     def __getstate__(self):
         """Minimize pickle size for parallel worker distribution."""
@@ -373,7 +376,6 @@ def sample_bounded_vector(xl, xu, mean_factor=0.5, std_factor=0.25):
     return truncnorm.rvs(a, b, loc=mu, scale=sigma)
 
 
-out = {}
 
 
 if __name__ == "__main__":
@@ -451,21 +453,79 @@ if __name__ == "__main__":
     #order stars along path in objective space
     stars_path = get_greedy_path_indices(df_stars, list(objective_sense.keys()))
     df_stars = df_stars.iloc[stars_path].reset_index()
-    
-    
-    navigator = ParetoNavigator(df_stars, weight_columns, df_macro, 
-                 mom_kit, qual_kit, data_features, df_price, params, 
-                 training_periods, HOLDINGS_FOLDER, EVAL_FOLDER, 
-                 objective_functions_dict, objective_sense
-    )
 
-
-    # example evaluate
+    # 17 Pymoo Parameters (12 Temporal Encoder + 5 Spatial/Logic)
     xl = np.array([0.01]*4 + [-2.0]*4 + [-1.0]*4 + [0.001, 0.1, -2.0, -1.0, 0.0])
     xu = np.array([0.95]*4 + [2.0]*4 + [1.0]*4 + [1.5, 5.0, 2.0, 1.0, 0.5])
-    x = sample_bounded_vector(xl, xu)
-    navigator._evaluate(x, out)
 
 
+    # Pack the re-injection data for the problem
+    # Note: Added HOLDINGS_FILE here to match your current __init__
+    problem_args = (df_stars, weight_columns, df_macro, 
+                 mom_kit, qual_kit, data_features, df_price, params, 
+                 training_periods, HOLDINGS_FOLDER, EVAL_FOLDER, 
+                 objective_functions_dict, objective_sense, xl, xu
+    )
 
-    xxx=1
+    var_count = 17
+    obj_count = len(objective_sense)
+    
+    
+    
+    
+    # Attempt to load existing progress
+    algorithm = load_checkpoint(CHECKPOINT_URI)
+    
+    if algorithm is None:
+        print("Initial Startup: Building RANDOM population...")
+        
+        
+        # 4. Initialize Manager and NSGA2 (Default sampling is FloatRandomSampling)
+        problem = RobustParallelManager(NUM_WORKERS, TIMEOUT, ParetoNavigator, problem_args, var_count, obj_count, xl, xu, TARGET_COMPLETIONS)
+        algorithm = NSGA2(
+            pop_size=POP_SIZE,
+            n_offsprings=N_OFFSPRING,
+            eliminate_duplicates=True
+        )
+        algorithm.setup(problem, termination=('n_gen', GEN_COUNT), seed=1)
+    else:
+        print(f"Resuming from Generation {algorithm.n_gen}...")
+        
+        # 1. Initialize the fresh manager
+        problem = RobustParallelManager(NUM_WORKERS, TIMEOUT, ParetoNavigator, problem_args, var_count, obj_count, xl, xu, TARGET_COMPLETIONS)
+        
+        # Sync the generation counts
+        problem.n_gen = algorithm.n_gen 
+        algorithm.problem = problem
+
+        # 2. FORCE OVERRIDE TERMINATION
+        # We re-import the termination factory to ensure it's fresh
+        from pymoo.termination import get_termination
+        algorithm.termination = get_termination("n_gen", GEN_COUNT)
+        
+        # 3. CRITICAL: Reset the 'has_finished' flag if it exists
+        algorithm.has_terminated = False
+    
+
+    # --- 4. EXECUTION LOOP ---
+    while algorithm.has_next():
+        infills = algorithm.ask()
+        print(f"--- Gen {algorithm.n_gen} Evaluation Start ---")
+        
+        # In a parallel version, you'd use your input_queue logic here. 
+        # For this dry run, it uses the standard evaluator.
+        algorithm.evaluator.eval(algorithm.problem, infills)
+        
+        algorithm.tell(infills=infills)
+        
+        # Checkpoint at the end of every successful generation
+        save_checkpoint(algorithm, CHECKPOINT_URI)
+        print(f"Gen {algorithm.n_gen} Success. Checkpoint saved.")
+
+    print("--- Optimization Complete ---")
+    algorithm.problem.cleanup()
+    # At the very end of your script
+    
+    print("Optimization Complete")
+    #os.system("sudo shutdown -h now")
+   

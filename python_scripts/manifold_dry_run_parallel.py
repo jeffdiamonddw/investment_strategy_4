@@ -17,6 +17,7 @@ GEN_COUNT =  600# Minimal for testing
 EVAL_FILE = "s3://jdinvestment/new_evaluations_9"
 HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_9"
 CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_740.pkl"
+TARGET_COMPLETIONS = 90
 
 
 # Shared Search Space Configuration
@@ -117,7 +118,7 @@ class DummyProblem(Problem):
 # ---------------------------------------
 
 class RobustParallelManager(Problem):
-    def __init__(self, num_workers, timeout_sec, workhorse_cls, workhorse_args, xl=XL_DEFAULT, xu=XU_DEFAULT):
+    def __init__(self, num_workers, timeout_sec, workhorse_cls, workhorse_args, var_count = VAR_COUNT,  obj_count = OBJ_COUNT, xl=XL_DEFAULT, xu=XU_DEFAULT, target_completions = TARGET_COMPLETIONS):
         # 1. Store local attributes first
         self.num_workers = num_workers
         self.timeout_sec = timeout_sec
@@ -125,7 +126,8 @@ class RobustParallelManager(Problem):
         self.workhorse_args = workhorse_args
         self.n_gen = 0
         self.n_obj = 5
-        self.recycle_interval = 10 
+        self.recycle_interval = 10
+        self.target_completions = target_completions 
         
         # 2. Setup internal communication
         self.input_queue = mp.Queue()
@@ -135,7 +137,7 @@ class RobustParallelManager(Problem):
 
         # 3. SINGLE Pymoo Initialization (Defining the Contract)
         # This replaces BOTH previous super() calls with the correct bounds
-        super().__init__(n_var=VAR_COUNT, n_obj=OBJ_COUNT, n_constr=0, xl=xl, xu=xu)
+        super().__init__(n_var=var_count, n_obj=obj_count, n_constr=0, xl=xl, xu=xu)
 
     def _spawn_workers(self):
         """Spins up persistent worker processes."""
@@ -180,7 +182,7 @@ class RobustParallelManager(Problem):
         # DYNAMIC TARGET:
         # In production (94), this is ~89-90. 
         # In your local test (2), this ensures it waits for both.
-        target_completions = POP_SIZE
+        target_completions = self.target_completions
     
    
         
@@ -189,27 +191,34 @@ class RobustParallelManager(Problem):
         initial_mem = psutil.virtual_memory().percent
         cpu_load = psutil.cpu_percent()
 
-        # 2. Push all 94 tasks to the fleet
-        for idx in range(n_individuals):
-            self.input_queue.put((idx, X[idx]))
-
-        received_count = 0
-       
         
-        # 3. Collection Loop
-        for _ in range(n_individuals):
-            elapsed = time.time() - gen_start_time
-            time_remaining = self.timeout_sec - elapsed
+        pending = range(n_individuals)
+        while len(pending) > 0:
             
-            if received_count >= target_completions or time_remaining <= 0:
-                break
+            # 2. Push tasks to the fleet
+            num_to_submit = min(self.num_workers, len(pending))
+            jobs_to_submit = pending[:num_to_submit]
+            for idx in jobs_to_submit:
+                self.input_queue.put((idx, X[idx]))
 
-            try:
-                idx, val, success = self.output_queue.get(timeout=max(0.1, time_remaining))
-                results_list[idx] = val if success else [1e9] * self.n_obj
-                received_count += 1
-            except mp.queues.Empty:
-                break
+        
+            # 3. Collection Loop
+            completions = 0
+            while completions < self.target_completions and len(pending) > 0:
+                elapsed = time.time() - gen_start_time
+                time_remaining = self.timeout_sec - elapsed
+                
+                if completions >= target_completions or time_remaining <= 0:
+                    break
+
+                try:
+                    idx, val, success = self.output_queue.get(timeout=max(0.1, time_remaining))
+                    results_list[idx] = val if success else [1e9] * self.n_obj
+                    pending = list(set(pending).difference([idx]))
+                    completions += 1
+                except mp.queues.Empty:
+                    break
+            self.force_reset_fleet()
 
         # 4. Calculate Critical Performance Metrics
         total_gen_time = time.time() - gen_start_time
@@ -218,10 +227,10 @@ class RobustParallelManager(Problem):
         # 5. LOG TO CLOUDWATCH
         # Structured to be easily searchable/filterable in the AWS Console
         logger.info(f"--- GENERATION {self.n_gen} MONITORING ---")
-        logger.info(f"STATUS: {'SUCCESS' if received_count >= POP_SIZE else 'UNDERPERFORMING'}")
-        logger.info(f"THROUGHPUT: {received_count}/{n_individuals} workers finished")
-        logger.info(f"GEN_TIME: {total_gen_time:.2f}s (Threshold reached at {received_count} evals)")
-        logger.info(f"AVG_WORKER_SPEED: {total_gen_time/max(1, received_count):.2f}s per eval")
+        logger.info(f"STATUS: {'SUCCESS' if len(pending) == 0 else 'UNDERPERFORMING'}")
+        logger.info(f"THROUGHPUT: {n_individuals - len(pending)}/{n_individuals} workers finished")
+        logger.info(f"GEN_TIME: {total_gen_time:.2f}s (Threshold reached at {n_individuals - len(pending)} evals)")
+        logger.info(f"AVG_WORKER_SPEED: {total_gen_time/max(1, n_individuals - len(pending)):.2f}s per eval")
         logger.info(f"SYSTEM_CPU: {cpu_load}% | SYSTEM_RAM: {final_mem}% (Δ {final_mem - initial_mem:.1f}%)")
         logger.info(f"----------------------------------------")
 
@@ -240,29 +249,59 @@ class RobustParallelManager(Problem):
 
 
     def force_reset_fleet(self):
-        # 1. Kill everyone immediately
+        """
+            Nuclear reset: Terminates all workers, replaces corrupted queues, 
+            and respawns the compute fleet to ensure a clean state for the next batch.
+        """
+        # 1. Kill the existing workers
+        # We use terminate() first to allow for a slightly cleaner OS-level cleanup,
+        # then follow up with SIGKILL for any stragglers.
         for p in self.workers:
             try:
-                os.kill(p.pid, signal.SIGKILL)
-                p.join(timeout=0.1)
-            except:
+                if p.is_alive():
+                    p.terminate() 
+            except Exception:
                 pass
-                
-        # 2. Re-create the communication channels
-        # This prevents the 'ppoll' deadlock by providing fresh file descriptors
+
+        # Give the OS a moment to reap the processes
+        time.sleep(0.1)
+
+        # 2. Hard-Kill and Join
+        # Ensures no 'zombie' entries remain in the process table
+        for p in self.workers:
+            try:
+                if p.is_alive():
+                    os.kill(p.pid, signal.SIGKILL)
+                p.join(timeout=0.1)
+            except Exception:
+                pass
+
+        # 3. Re-create the communication channels
+        # Replacing the queues is the only way to guarantee the internal 
+        # locks/pipes aren't in a corrupted state from the terminations.
         self.input_queue = mp.Queue()
         self.output_queue = mp.Queue()
 
-        # 3. Re-spawn using the original "Fat" args
+        # 4. Re-spawn the fleet
         self.workers = []
         for i in range(self.num_workers):
+            # We pass the NEW queue references here
             p = mp.Process(
                 target=self._worker_loop, 
-                args=(self.input_queue, self.output_queue, self.workhorse_cls, self.workhorse_args, i),
+                args=(
+                    self.input_queue, 
+                    self.output_queue, 
+                    self.workhorse_cls, 
+                    self.workhorse_args, 
+                    i
+                ),
                 daemon=True
             )
             p.start()
             self.workers.append(p)
+        
+        # Reset any generation-specific state tracking
+        self.prev_target_pos = None
 
     def cleanup(self):
         """Properly shuts down the worker processes."""
