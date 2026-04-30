@@ -8,7 +8,7 @@ from pymoo.core.problem import ElementwiseProblem
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.population import Population
 from scipy.spatial.distance import pdist, squareform
-import networkx as nx
+
 # Ensure these are imported from your local environment
 from explore_cluster import save_result_agnostic, simulate, get_gic_eps
 from manifold_dry_run_parallel import build_kit, RobustParallelManager, load_checkpoint, save_checkpoint  
@@ -20,16 +20,16 @@ QUALITY_FILE = "simulation_data/quality.nc"
 GIC_FILE = "simulation_data/gic_data.nc"
 MACRO_FILE = "simulation_data/macro_signals.csv"
 MANIFOLD_FILE = "sim_results/manifold_triple_threat.csv"
-HOLDINGS_FOLDER = "s3://jdinvestment/pareto_nav_holdings_1"
-EVAL_FOLDER = "s3://jdinvestment/pareto_nav_eval_1"
-CHECKPOINT_URI= "s3://jdinvestment/checkpoints/pareto_nav_checkpoint_2"
+HOLDINGS_FOLDER = "s3://jdinvestment/pareto_nav_holdings_2"
+EVAL_FOLDER = "s3://jdinvestment/pareto_nav_eval_2"
+CHECKPOINT_URI= "s3://jdinvestment/checkpoints/pareto_nav_checkpoint_3"
 
-POP_SIZE = 3   # Minimal for testing
+POP_SIZE = 180   # Minimal for testing
 GEN_COUNT =  300
-N_OFFSPRING = 3
-NUM_WORKERS = 3
+N_OFFSPRING = 188
+NUM_WORKERS = 94
 TIMEOUT = 180
-TARGET_COMPLETIONS = 2
+TARGET_COMPLETIONS = 90
 
 
 

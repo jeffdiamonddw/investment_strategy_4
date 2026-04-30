@@ -90,7 +90,7 @@ def get_ranked_subset(df, objective_cols, senses, n_required):
 
 if __name__ == "__main__":
 
-    database_name = table_name = "new_evaluations_9"
+    database_name = table_name = "pareto_nav_eval_2"
     # Read the table metadata and data using the Glue catalo
 
     df = wr.s3.read_parquet_table(
@@ -98,9 +98,12 @@ if __name__ == "__main__":
         database=database_name
     )
 
-    df.loc[:, 'drawdown'] = df.loc[:, ['f1_2008', 'f2_2020', 'f3_2022']].sum(axis = 1)
-    senses = ['min', 'max', 'max']
-    obj_columns = ['drawdown', 'f4_terminal', 'f5_annual_worst']
+    #df.loc[:, 'drawdown'] = df.loc[:, ['f1_2008', 'f2_2020', 'f3_2022']].sum(axis = 1)
+    #senses = ['min', 'max', 'max']
+    #obj_columns = ['drawdown', 'f4_terminal', 'f5_annual_worst']
+
+    obj_columns = ['boom', 'crash']
+    senses = ['max', 'max']
     df_ranked = get_ranked_subset(df, obj_columns, senses, 500)
 
-    df_ranked.to_csv('analysis/top_ranked.csv')
+    df_ranked.to_csv('analysis/top_ranked_pareto_nav.csv')

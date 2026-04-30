@@ -73,7 +73,7 @@ VAR_COLS = [
 import numpy as np
 import pandas as pd
 
-def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
+def generate_perturbations(df_seeds, n_required, xl, xu, var_cols = VAR_COLS, noise_scale=0.05):
     """
     Generates perturbations where noise is scaled by the parent value (CV).
     
@@ -83,7 +83,7 @@ def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
         xl, xu: Lower and upper bounds for clipping.
         noise_scale: The desired Coefficient of Variation (std / parent_value).
     """
-    var_cols = VAR_COLS 
+     
     seeds = df_seeds[var_cols].values
     parent_ids = df_seeds['sim_id'].values 
     
@@ -129,12 +129,12 @@ def generate_perturbations(df_seeds, n_required, xl, xu, noise_scale=0.05):
 STOP_SIGNAL = "STOP"
 
 class HighThroughputBatchManager(Problem):
-    def __init__(self, num_workers, timeout_sec, workhorse_cls, workhorse_args, target_completion):
+    def __init__(self, num_workers, timeout_sec, workhorse_cls, workhorse_args, target_completions):
         self.num_workers = num_workers
         self.timeout_sec = timeout_sec
         self.workhorse_cls = workhorse_cls
         self.workhorse_args = workhorse_args
-        self.target_completion = target_completion # Wait for 90/94
+        self.target_completions = target_completions # Wait for 90/94
         
         self.input_queue = mp.Queue()
         self.output_queue = mp.Queue()
@@ -176,43 +176,100 @@ class HighThroughputBatchManager(Problem):
             except Exception as e:
                 output_queue.put((idx, str(e), False))
 
+
+    def force_reset_fleet(self):
+        """
+            Nuclear reset: Terminates all workers, replaces corrupted queues, 
+            and respawns the compute fleet to ensure a clean state for the next batch.
+        """
+        # 1. Kill the existing workers
+        # We use terminate() first to allow for a slightly cleaner OS-level cleanup,
+        # then follow up with SIGKILL for any stragglers.
+        for p in self.workers:
+            try:
+                if p.is_alive():
+                    p.terminate() 
+            except Exception:
+                pass
+
+        # Give the OS a moment to reap the processes
+        time.sleep(0.1)
+
+        # 2. Hard-Kill and Join
+        # Ensures no 'zombie' entries remain in the process table
+        for p in self.workers:
+            try:
+                if p.is_alive():
+                    os.kill(p.pid, signal.SIGKILL)
+                p.join(timeout=0.1)
+            except Exception:
+                pass
+
+        # 3. Re-create the communication channels
+        # Replacing the queues is the only way to guarantee the internal 
+        # locks/pipes aren't in a corrupted state from the terminations.
+        self.input_queue = mp.Queue()
+        self.output_queue = mp.Queue()
+
+        # 4. Re-spawn the fleet
+        self.workers = []
+        for i in range(self.num_workers):
+            # We pass the NEW queue references here
+            p = mp.Process(
+                target=self._worker_loop, 
+                args=(
+                    self.input_queue, 
+                    self.output_queue, 
+                    self.workhorse_cls, 
+                    self.workhorse_args, 
+                    i
+                ),
+                daemon=True
+            )
+            p.start()
+            self.workers.append(p)
+        
+        # Reset any generation-specific state tracking
+        self.prev_target_pos = None
+
+        
     def run_batch(self, X):
         """
         Submits 94 evaluations and releases once 90 are finished.
         Undone evaluations are returned to be re-queued.
         """
-        n_tasks = X.shape[0]
-        results = {} 
-        completed_indices = set()
+       
         
-        # 1. Enqueue the full batch
-        for idx in range(n_tasks):
-            self.input_queue.put((idx, X[idx]))
+        pending = range(X.shape[0])
+        while len(pending) > 0:
+            
+            # 2. Push tasks to the fleet
+            num_to_submit = min(self.num_workers, len(pending))
+            jobs_to_submit = pending[:num_to_submit]
+            for idx in jobs_to_submit:
+                self.input_queue.put((idx, X[idx]))
 
-        # 2. Collect until target_completion is reached
-        start_time = time.time()
-        while len(completed_indices) < self.target_completion:
-            try:
-                # Use timeout to keep the loop alive and check for total hangs
-                idx, val, success = self.output_queue.get(timeout=self.timeout_sec)
+        
+            # 3. Collection Loop
+            completions = 0
+            start_time = time.time()
+            while completions < self.target_completions and len(pending) > 0:
+                elapsed = time.time() - start_time
+                time_remaining = self.timeout_sec - elapsed
                 
-                if success:
-                    results[idx] = val
-                    completed_indices.add(idx)
-                else:
-                    # Robustness: Re-enqueue if the worker explicitly failed
-                    self.input_queue.put((idx, X[idx]))
-                    
-            except mp.queues.Empty:
-                print(f"Batch timeout reached at {len(completed_indices)}/{self.target_completion}")
-                break
+                if completions >= self.target_completions or time_remaining <= 0:
+                    break
 
-        # 3. Identify and return undone indices
-        all_indices = set(range(n_tasks))
-        undone_indices = list(all_indices - completed_indices)
-        
-        print(f"Batch Complete: {len(completed_indices)} finished, {len(undone_indices)} returned to queue.")
-        return results, undone_indices
+                try:
+                    idx, val, success = self.output_queue.get(timeout=max(0.1, time_remaining))
+                    pending = list(set(pending).difference([idx]))
+                    completions += 1
+                except mp.queues.Empty:
+                    break
+            self.force_reset_fleet()
+ 
+
+       
 
     def cleanup(self):
         for _ in range(self.num_workers):
@@ -279,32 +336,8 @@ if __name__ == "__main__":
     problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE, EVAL_FILE)
     manager = HighThroughputBatchManager(num_workers = NUM_WORKERS, timeout_sec =TIMEOUT, workhorse_cls = TripleThreatProblem, workhorse_args = problem_args, target_completion = BATCH_REQUIREMENT)
     
-    all_results = []
-    task_pool = list(enumerate(X_all)) # List of (original_idx, x_vector)
+    manager.run_batch(X_all)
     
-    print("Starting high-throughput evaluation...")
     
-    while len(task_pool) > 0:
-        # Take up to 94 tasks from the pool
-        current_batch = task_pool[:NUM_WORKERS]
-        task_pool = task_pool[NUM_WORKERS:]
-        
-        # Separate indices for the manager
-        batch_indices = [t[0] for t in current_batch]
-        batch_X = np.array([t[1] for t in current_batch])
-        
-        # Run the gate
-        results_dict, undone_local_indices = manager.run_batch(batch_X)
-        
-        # Map local batch indices back to original task_pool indices
-        for local_idx in undone_local_indices:
-            # Put the actual task back at the front of the pool
-            task_pool.insert(0, current_batch[local_idx])
-            
-        # Store successful results
-        for res in results_dict.values():
-            all_results.append(res)
-            
-        print(f"Progress: {len(all_results)}/{NUM_PERTURBATIONS} total evaluations recorded.")
 
     manager.cleanup()

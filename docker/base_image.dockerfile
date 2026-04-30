@@ -40,7 +40,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
     botocore==1.37.0 \
     joblib==1.4.0 \
     requests==2.32.0 \
-    python-dotenv==1.0.1
+    python-dotenv==1.0.1\
+    networkx
 
 # 5. Create Directories and Set Workspace
 # We create /share specifically for your local volume mounting
