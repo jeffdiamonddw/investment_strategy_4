@@ -1,10 +1,11 @@
 import awswrangler as wr
 import pandas as pd
 import time
+import sys
 
 # Configuration
 bucket = "jdinvestment"
-folder_path = "pareto_nav_eval_2"
+folder_path = sys.argv[1]
 database_name = folder_path
 table_name = folder_path
 s3_path = f"s3://{bucket}/{folder_path}"

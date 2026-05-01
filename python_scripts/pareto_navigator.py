@@ -11,7 +11,7 @@ from scipy.spatial.distance import pdist, squareform
 
 # Ensure these are imported from your local environment
 from explore_cluster import save_result_agnostic, simulate, get_gic_eps
-from manifold_dry_run_parallel import build_kit, RobustParallelManager, load_checkpoint, save_checkpoint  
+from manifold_dry_run_parallel import build_kit, RobustParallelManager, load_checkpoint, save_checkpoint, get_triple_threat_params 
 
 
 STAR_FILE = 'analysis/stars.csv'
@@ -104,10 +104,9 @@ def get_direction_sign(label):
 
 class ParetoNavigator(ElementwiseProblem):
     
-    def __init__(self, df_stars, weight_columns, df_macro, 
-                 mom_kit, qual_kit, data_features, df_price, params, 
-                 training_periods, holdings_folder, eval_folder, 
-                 objective_functions_dict, objective_sense, xl, xu):
+    def __init__(self, 
+                 mom_kit, qual_kit, df_macro, data_features, df_price, params, training_periods, holdings_folder, eval_folder, 
+                 df_stars, weight_columns, objective_functions_dict, objective_sense, xl, xu):
         """
         17-Parameter Navigator [Jeff Diamond Analytics]
         
@@ -377,55 +376,27 @@ def sample_bounded_vector(xl, xu, mean_factor=0.5, std_factor=0.25):
 
 
 
+def get_pareto_nav_params(
+        momentum_file = "simulation_data/momentum.nc", 
+        quality_file = "simulation_data/quality.nc",
+        gic_file = "simulation_data/gic_data.nc",
+        macro_file = "simulation_data/macro_signals.csv",
+        manifold_file = "sim_results/manifold_triple_threat.csv",
+        holdings_folder = HOLDINGS_FOLDER,
+        eval_folder = EVAL_FOLDER,
+        star_file = STAR_FILE
 
-if __name__ == "__main__":
+    ):
 
-    print("--- START ---")
-
-    da_mom = xr.open_dataset(MOMENTUM_FILE).to_array().squeeze()
-    da_qual = xr.open_dataset(QUALITY_FILE).to_array().squeeze()
-    _data_features = xr.concat([da_mom, da_qual], dim='band')
-    da_mom_gic = xr.open_dataarray(GIC_FILE)
-    da_qual_gic = get_gic_eps(da_mom_gic)
-    data_features = xr.concat([_data_features, xr.concat([da_mom_gic, da_qual_gic], dim='band')], dim='symbol').drop_sel(band = 'price_end')
-    
-    df_price = da_mom.sel(band='price_end').to_pandas()
-    
-    df_macro = pd.read_csv(MACRO_FILE, index_col=0)
-    df_macro.index = pd.to_datetime(df_macro.index)
-    
-    mapping = {'VIX_RATIO_SMOOTH': 'vix_z', 'YIELD_SPREAD_SMOOTH': 'yield_spread_z', 'HY_SPREAD_SMOOTH': 'hy_spread_z', 'FED_RATE_SMOOTH': 'fed_z'}
-    for csv_col, engine_key in mapping.items():
-        if csv_col in df_macro.columns:
-            rolling_mean = df_macro[csv_col].rolling(window=252, min_periods=1).mean()
-            rolling_std = df_macro[csv_col].rolling(window=252, min_periods=1).std()
-            df_macro[engine_key] = (df_macro[csv_col] - rolling_mean) / rolling_std.replace(0, 1)
-
-    
-    
-    dates = sorted(list(set(df_macro.index).intersection(df_price.columns)))
-    df_macro = df_macro.loc[dates, [col for col in df_macro.columns if col.endswith('z')]]
-    
-    params = {
-        'principal': [327000, 60000, 21000], 'max_frac': .05, 'feature_horizon_weeks': 104,
-        'min_price': 5, 'trade_fee': 7, 'objective_sensitivity': 0.144, 'obj_threshold': 0,
-        'start_date': pd.to_datetime('Jan 1, 2005'), 'end_date': pd.Timestamp.now()
-    }
-    
-    training_periods = {
-        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
-        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
-    }
-
-    print("Initializing problem kits...")
-    df_man = pd.read_csv(MANIFOLD_FILE)
-    mom_cols = ['dollar_ret_1p', 'dollar_ret_6p', 'dollar_ret_13p', 'dollar_ret_26p']
-    qual_cols = ['avg_eps_1q', 'avg_eps_2q', 'avg_eps_4q', 'avg_eps_8q']
-    
-    df_elite = df_man.nlargest(int(len(df_man) * 0.10), 'f4_terminal')
-    mom_kit = build_kit(df_elite, mom_cols)
-    qual_kit = build_kit(df_elite, qual_cols)
-
+    triple_threat_params = get_triple_threat_params(
+        momentumn_file = momentum_file,
+        quality_file = quality_file,
+        gic_file = gic_file,
+        manifold_file = manifold_file,
+        holdings_folder =  holdings_folder, 
+        eval_foler = eval_folder
+    )
+    data_features = triple_threat_params[3]
     tickers = data_features.symbol.values
     objective_functions_dict = {
         'f1_2008': functools.partial(drawdown_integral, pd.to_datetime('2007-11-26'), pd.to_datetime('2012-10-22'), tickers),
@@ -437,7 +408,15 @@ if __name__ == "__main__":
         'boom': functools.partial(annualized_return, pd.to_datetime('2020-01-01'), pd.to_datetime('2024-12-31'), tickers),
     }
     objective_sense = {'boom': 'max', 'crash': 'max'}
-    weight_columns = mom_cols + qual_cols + [
+    weight_columns = [
+            'dollar_ret_1p',
+            'dollar_ret_6p',
+            'dollar_ret_13p',
+            'dollar_ret_26p',
+            'avg_eps_1q',
+            'avg_eps_2q',
+            'avg_eps_4q',
+            'avg_eps_8q', 
             'threshold', 
             'beta',
             'mom_decay',
@@ -447,7 +426,7 @@ if __name__ == "__main__":
             'macro_weights_2',
             'macro_weights_3'
     ]
-    df_stars = pd.read_csv(STAR_FILE)
+    df_stars = pd.read_csv(star_file)
 
 
     #order stars along path in objective space
@@ -461,13 +440,19 @@ if __name__ == "__main__":
 
     # Pack the re-injection data for the problem
     # Note: Added HOLDINGS_FILE here to match your current __init__
-    problem_args = (df_stars, weight_columns, df_macro, 
-                 mom_kit, qual_kit, data_features, df_price, params, 
-                 training_periods, HOLDINGS_FOLDER, EVAL_FOLDER, 
-                 objective_functions_dict, objective_sense, xl, xu
-    )
+    problem_args = triple_threat_params + (df_stars, weight_columns, objective_functions_dict, objective_sense, xl, xu)
+
+    return problem_args
+
+
+
+if __name__ == "__main__":
+
+    
+    problem_args = get_pareto_nav_params(star_file = STAR_FILE)
 
     var_count = 17
+    objective_sense = problem_args[-3]
     obj_count = len(objective_sense)
     
     

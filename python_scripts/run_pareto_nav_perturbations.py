@@ -28,12 +28,12 @@ NOISE_SCALE = 0.01  # 5% COEFF VAR
 NUM_WORKERS = 94
 TARGET_COMPLETIONS = 90
 TIMEOUT = 180
-EVAL_FOLDER = "s3://jdinvestment/perturbation_evaluations_nav"
-HOLDINGS_FOLDER = "s3://jdinvestment/perturbation_holdings_nav"
-PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_nav"
+EVAL_FOLDER = "s3://jdinvestment/perturbation_evaluations_nav_1"
+HOLDINGS_FOLDER = "s3://jdinvestment/perturbation_holdings_nav_1"
+PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_nav_1"
 
 PARETO_INPUT_FILE = "analysis/stars.csv"
-STAR_FILE = 'temp/single_star.csv'
+STAR_FILE = 'temp/all_pareto_nav_stars.csv'
 MOMENTUM_FILE = "simulation_data/momentum.nc"
 QUALITY_FILE = "simulation_data/quality.nc"
 GIC_FILE = "simulation_data/gic_data.nc"

@@ -14,8 +14,8 @@ N_OFFSPRINGS = 188
 TIMEOUT = 180
 POP_SIZE = 180   # Minimal for testing
 GEN_COUNT =  600# Minimal for testing
-EVAL_FILE = "s3://jdinvestment/new_evaluations_9"
-HOLDINGS_FILE = "s3://jdinvestment/new_holdings_history_9"
+EVAL_FOLDER = "s3://jdinvestment/new_evaluations_9"
+HOLDINGS_FOLDER = "s3://jdinvestment/new_holdings_history_9"
 CHECKPOINT_URI = "s3://jdinvestment/checkpoints/checkpoint_740.pkl"
 TARGET_COMPLETIONS = 90
 
@@ -589,21 +589,29 @@ class TripleThreatProblem(ElementwiseProblem):
         out["F"] = [f1, f2, f3, -f4, -f5, -f6]
         print('time: {}'.format(time.time() - t1))
 
-def main():
+
+def get_triple_threat_params(
+        momentum_file = "simulation_data/momentum.nc", 
+        quality_file = "simulation_data/quality.nc",
+        gic_file = "simulation_data/gic_data.nc",
+        macro_file = "simulation_data/macro_signals.csv",
+        manifold_file = "sim_results/manifold_triple_threat.csv",
+        holdings_folder = HOLDINGS_FOLDER,
+        eval_folder = EVAL_FOLDER
+
+
+):
    
-        
-        
-    print("--- DRY RUN START ---")
-    da_mom = xr.open_dataset("simulation_data/momentum.nc").to_array().squeeze()
-    da_qual = xr.open_dataset("simulation_data/quality.nc").to_array().squeeze()
+    da_mom = xr.open_dataset(momentum_file).to_array().squeeze()
+    da_qual = xr.open_dataset(quality_file).to_array().squeeze()
     _data_features = xr.concat([da_mom, da_qual], dim='band')
-    da_mom_gic = xr.open_dataarray("simulation_data/gic_data.nc")
+    da_mom_gic = xr.open_dataarray(gic_file)
     da_qual_gic = get_gic_eps(da_mom_gic)
     data_features = xr.concat([_data_features, xr.concat([da_mom_gic, da_qual_gic], dim='band')], dim='symbol').drop_sel(band = 'price_end')
     
     df_price = da_mom.sel(band='price_end').to_pandas()
     
-    df_macro = pd.read_csv("simulation_data/macro_signals.csv", index_col=0)
+    df_macro = pd.read_csv(macro_file, index_col=0)
     df_macro.index = pd.to_datetime(df_macro.index)
     
     mapping = {'VIX_RATIO_SMOOTH': 'vix_z', 'YIELD_SPREAD_SMOOTH': 'yield_spread_z', 'HY_SPREAD_SMOOTH': 'hy_spread_z', 'FED_RATE_SMOOTH': 'fed_z'}
@@ -630,7 +638,7 @@ def main():
     }
 
     print("Initializing problem kits...")
-    df_man = pd.read_csv("sim_results/manifold_triple_threat.csv")
+    df_man = pd.read_csv(manifold_file)
     mom_cols = ['dollar_ret_1p', 'dollar_ret_6p', 'dollar_ret_13p', 'dollar_ret_26p']
     qual_cols = ['avg_eps_1q', 'avg_eps_2q', 'avg_eps_4q', 'avg_eps_8q']
     
@@ -638,14 +646,25 @@ def main():
     m_kit = build_kit(df_elite, mom_cols)
     q_kit = build_kit(df_elite, qual_cols)
 
-    problem = TripleThreatProblem(m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE, EVAL_FILE)
+    
+    # Pack the re-injection data for the problem
+    # Note: Added HOLDINGS_FILE here to match your current __init__
+    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, holdings_folder, eval_folder)
+
+    return problem_args
+
+
+
+def main():
+   
+    problem_args = get_triple_threat_params(holdings_folder = HOLDINGS_FOLDER, eval_folder = EVAL_FOLDER)    
+        
+    
 
     # Attempt to load existing progress
     algorithm = load_checkpoint(CHECKPOINT_URI)
     
-    # Pack the re-injection data for the problem
-    # Note: Added HOLDINGS_FILE here to match your current __init__
-    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE, EVAL_FILE)
+    
 
     if algorithm is None:
         print("Initial Startup: Building RANDOM population...")
