@@ -48,6 +48,8 @@ XU_DEFAULT = np.array([
 import os
 import boto3 
 import signal
+import time
+import random
 
 
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -118,7 +120,20 @@ class DummyProblem(Problem):
 # ---------------------------------------
 
 class RobustParallelManager(Problem):
-    def __init__(self, num_workers, timeout_sec, workhorse_cls, workhorse_args, var_count = VAR_COUNT,  obj_count = OBJ_COUNT, xl=XL_DEFAULT, xu=XU_DEFAULT, target_completions = TARGET_COMPLETIONS):
+    def __init__(
+            self, 
+            num_workers, 
+            timeout_sec, 
+            workhorse_cls, 
+            workhorse_args, 
+            var_count = VAR_COUNT,  
+            obj_count = OBJ_COUNT, 
+            xl=XL_DEFAULT, 
+            xu=XU_DEFAULT, 
+            target_completions = TARGET_COMPLETIONS, 
+        ):
+        
+        logger.info('num_workers: {}, timout_sec: {}, target_completions: {}'.format(num_workers, timeout_sec, target_completions))
         # 1. Store local attributes first
         self.num_workers = num_workers
         self.timeout_sec = timeout_sec
@@ -158,15 +173,20 @@ class RobustParallelManager(Problem):
         local_engine = workhorse_cls(*workhorse_args)
         worker_session = boto3.Session()
         while True:
+            time.sleep(random.uniform(0, 1))
             task = input_queue.get()
             if task == STOP_SIGNAL:
                 break
             
             idx, x_vector = task
+            sim_id = abs(hash(tuple(x_vector))) % (10**10)
+            logger.info('{} {} got a task'.format(time.time(), sim_id))
             try:
                 out_dict = {}
                 # Call the existing _evaluate method from your original class
                 local_engine._evaluate(x_vector, out_dict, session = worker_session)
+                time.sleep(random.uniform(0, 3))
+                logger.info('{} {} putting result on queue'.format(time.time, sim_id))
                 output_queue.put((idx, out_dict["F"], True))
             except Exception as e:
                 output_queue.put((idx, str(e), False))

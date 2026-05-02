@@ -1,3 +1,6 @@
+import time, random
+import os
+
 import numpy as np
 import pandas as pd
 from pymoo.core.problem import ElementwiseProblem
@@ -12,22 +15,26 @@ from pareto_navigator import ParetoNavigator, get_pareto_nav_params
 
 
 
-HOLDINGS_FOLDER = "s3://jdinvestment/robust_mean_nav_holdings"
-EVAL_FOLDER = "s3://jdinvestment/robust_mean_nav_evaluations"
+HOLDINGS_FOLDER = "s3://jdinvestment/robust_median_nav_holdings_4"
+EVAL_FOLDER = "s3://jdinvestment/robust_median_nav_evaluations_4"
 STAR_FILE = 'analysis/stars.csv'
 INITIAL_POP_FILE = "temp/robust_mean_starting_pop.csv"
-CHECKPOINT_URI = "s3://jdinvestment/checkpoints/robust_mean_nav_checkpoint_1"
-POP_SIZE = 1
-N_OFFSPRING = 1
-NUM_WORKERS = 1
-TARGET_COMPLETIONS = 1
-GEN_COUNT = 2
-TIMEOUT_SEC = 180
-OUT_FOLDER = "s3://jdinvestment/robust_mean_nav_means"
+CHECKPOINT_URI = "s3://jdinvestment/checkpoints/robust_median_nav_checkpoint_4"
+POP_SIZE = 180
+N_OFFSPRING = 188
+NUM_WORKERS = 94
+TARGET_COMPLETIONS = 90
+GEN_COUNT = 150
+TIMEOUT_SEC = 180 * 5
+OUT_FOLDER = "s3://jdinvestment/robust_nav_medians_4"
 
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-
-class RobustMeanEvaluator(ElementwiseProblem):
+class RobustMedianEvaluator(ElementwiseProblem):
     def __init__(self, workhorse_cls, workhorse_args, n_samples=5, perturbation_cv=0.01, out_folder = OUT_FOLDER):
         """
         An 'Abstract-Aware' wrapper. It stores the CLASS of the simulation 
@@ -63,12 +70,13 @@ class RobustMeanEvaluator(ElementwiseProblem):
             self.local_sim._evaluate(perturbed_x, sample_out, *args, **kwargs)
             results.append(sample_out["F"])
 
-        mean_result = np.mean(results, axis=0)
+        median_result = np.median(results, axis=0)
         param_cols = ["p_{}".format(i) for i in range(len(x))]
         objective_cols = list(self.workhorse_args[-3].keys())
-        df_out = pd.DataFrame([[sim_id] + list(-mean_result) + list(x)], columns = ['sim_id'] + objective_cols + param_cols)
+        df_out = pd.DataFrame([[sim_id] + list(-median_result) + list(x)], columns = ['sim_id'] + objective_cols + param_cols)
+        time.sleep(random.uniform(0, 5))
         df_out.to_csv("{}/{}.csv".format(self.out_folder, sim_id))    
-        out["F"] = mean_result
+        out["F"] = median_result
 
 
 
@@ -85,7 +93,7 @@ if __name__ == "__main__":
     problem = RobustParallelManager(
             num_workers=NUM_WORKERS,
             timeout_sec=TIMEOUT_SEC,
-            workhorse_cls=RobustMeanEvaluator, # The wrapper class
+            workhorse_cls=RobustMedianEvaluator, # The wrapper class
             workhorse_args= (ParetoNavigator, pareto_nav_args, 5, 0.01),      # The 'Wrapped' class + Sim Args
             var_count=17,
             obj_count=2,

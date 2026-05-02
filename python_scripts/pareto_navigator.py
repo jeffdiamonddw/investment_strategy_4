@@ -389,12 +389,12 @@ def get_pareto_nav_params(
     ):
 
     triple_threat_params = get_triple_threat_params(
-        momentumn_file = momentum_file,
+        momentum_file = momentum_file,
         quality_file = quality_file,
         gic_file = gic_file,
         manifold_file = manifold_file,
         holdings_folder =  holdings_folder, 
-        eval_foler = eval_folder
+        eval_folder = eval_folder
     )
     data_features = triple_threat_params[3]
     tickers = data_features.symbol.values
@@ -450,13 +450,14 @@ if __name__ == "__main__":
 
     
     problem_args = get_pareto_nav_params(star_file = STAR_FILE)
+    xl, xu = problem_args[-2:]
 
     var_count = 17
     objective_sense = problem_args[-3]
     obj_count = len(objective_sense)
     
     
-    
+    problem = RobustParallelManager(NUM_WORKERS, TIMEOUT, ParetoNavigator, problem_args, var_count, obj_count, xl, xu, TARGET_COMPLETIONS)
     
     # Attempt to load existing progress
     algorithm = load_checkpoint(CHECKPOINT_URI)
@@ -466,7 +467,7 @@ if __name__ == "__main__":
         
         
         # 4. Initialize Manager and NSGA2 (Default sampling is FloatRandomSampling)
-        problem = RobustParallelManager(NUM_WORKERS, TIMEOUT, ParetoNavigator, problem_args, var_count, obj_count, xl, xu, TARGET_COMPLETIONS)
+        
         algorithm = NSGA2(
             pop_size=POP_SIZE,
             n_offsprings=N_OFFSPRING,
@@ -476,8 +477,7 @@ if __name__ == "__main__":
     else:
         print(f"Resuming from Generation {algorithm.n_gen}...")
         
-        # 1. Initialize the fresh manager
-        problem = RobustParallelManager(NUM_WORKERS, TIMEOUT, ParetoNavigator, problem_args, var_count, obj_count, xl, xu, TARGET_COMPLETIONS)
+        
         
         # Sync the generation counts
         problem.n_gen = algorithm.n_gen 
