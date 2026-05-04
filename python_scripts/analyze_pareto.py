@@ -90,7 +90,7 @@ def get_ranked_subset(df, objective_cols, senses, n_required):
 
 if __name__ == "__main__":
 
-    database_name = table_name = "pareto_nav_eval_2"
+    database_name = table_name = "robust_nav_medians_4"
     # Read the table metadata and data using the Glue catalo
 
     df = wr.s3.read_parquet_table(
@@ -106,4 +106,4 @@ if __name__ == "__main__":
     senses = ['max', 'max']
     df_ranked = get_ranked_subset(df, obj_columns, senses, 500)
 
-    df_ranked.to_csv('analysis/top_ranked_pareto_nav.csv')
+    df_ranked.to_csv('analysis/top_ranked_pareto_nav_median.csv')

@@ -1,0 +1,69 @@
+symbol,asset_type,direction,sector_strategy,momentum_weight,quality_weight
+ADC,stock,long,REIT (Agree Realty),0.3,0.7
+ADM,stock,long,Consumer Defensive (Archer-Daniels),0.5,0.5
+APH,stock,long,Technology (Amphenol),0.5,0.5
+APO,stock,long,Asset Management (Apollo),0.6,0.4
+APP,stock,long,Technology (Applovin),0.8,0.2
+ARES,stock,long,Asset Management / Credit,0.5,0.5
+AZO,stock,long,Consumer Cyclical (AutoZone),0.4,0.6
+BKNG,stock,long,Consumer Cyclical (Booking),0.5,0.5
+BRK-B,stock,long,Financials (Berkshire Hathaway),0.3,0.7
+BTAL,etf,short/trend,Market Neutral (Short High Beta),,
+BTE,stock,long,Energy (Baytex),0.7,0.3
+BX,stock,long,Private Equity (Blackstone),0.6,0.4
+CASY,stock,long,Consumer Defensive (Casey's),0.4,0.6
+COST,stock,long,Consumer Defensive (Costco),0.3,0.7
+CTA,etf,short/trend,Managed Futures (Rates & Commodities),,
+CVX,stock,long,Energy (Chevron),0.5,0.5
+CWST,stock,long,Industrials (Casella Waste),0.4,0.6
+CYA,etf,short/trend,Tail Risk / Black Swan Hedge,,
+DBMF,etf,short/trend,Managed Futures (Hedge Fund Replication),,
+DECK,stock,long,Consumer Cyclical (Deckers),0.6,0.4
+DOW,stock,long,Basic Materials (Dow),0.5,0.5
+EGP,stock,long,REIT (EastGroup),0.4,0.6
+EXEL,stock,long,Healthcare / Biotech,0.6,0.4
+FANG,stock,long,Energy (Diamondback),0.6,0.4
+FICO,stock,long,Technology (Fair Isaac),0.5,0.5
+FMF,etf,short/trend,Managed Futures Strategy,,
+FR,stock,long,REIT (First Industrial),0.4,0.6
+GILD,stock,long,Healthcare / Biotech,0.4,0.6
+IVOL,etf,short/trend,Inflation & Rate Volatility Hedge,,
+KKR,stock,long,Private Equity (KKR),0.6,0.4
+KLAC,stock,long,Technology (KLA Corp),0.6,0.4
+KMLM,etf,short/trend,Managed Futures (Commodities/Bonds/FX),,
+LLY,stock,long,Healthcare (Eli Lilly),0.5,0.5
+LMT,stock,long,Industrials (Lockheed Martin),0.4,0.6
+MCK,stock,long,Healthcare (McKesson),0.4,0.6
+MELI,stock,long,Consumer Cyclical (MercadoLibre),0.7,0.3
+META,stock,long,Technology (Meta),0.7,0.3
+MPC,stock,long,Energy (Marathon Petroleum),0.6,0.4
+MPWR,stock,long,Technology (Monolithic Power),0.6,0.4
+MSFT,stock,long,Technology (Microsoft),0.5,0.5
+NNN,stock,long,REIT (NNN),0.3,0.7
+O,stock,long,REIT (Realty Income),0.2,0.8
+ORLY,stock,long,Consumer Cyclical (O'Reilly),0.4,0.6
+PFIX,etf,short/trend,Interest Rate Hedge (Short Bonds),,
+PGR,stock,long,Financials (Progressive),0.4,0.6
+PLD,stock,long,REIT (Prologis),0.4,0.6
+PSA,stock,long,REIT (Public Storage),0.3,0.7
+REXR,stock,long,REIT (Rexford),0.4,0.6
+RSBT,etf,short/trend,Stacked Bonds & Managed Futures,,
+RSG,stock,long,Industrials (Republic Services),0.3,0.7
+SCHD,etf,long,US Dividend Equity,0.3,0.7
+SCHG,etf,long,US Large Cap Growth,0.6,0.4
+STAG,stock,long,REIT (STAG Industrial),0.4,0.6
+SVXY,etf,short/trend,Inverse Volatility (Short VIX),,
+TMUS,stock,long,Communication Services (T-Mobile),0.4,0.6
+TRI,stock,long,Industrials (Thomson Reuters),0.4,0.6
+TRNO,stock,long,REIT (Terreno),0.4,0.6
+TSLA,stock,long,Consumer Cyclical (Tesla),0.8,0.2
+UNH,stock,long,Healthcare (UnitedHealth),0.4,0.6
+VOO,etf,long,S&P 500 Index,0.5,0.5
+VRT,stock,long,Industrials (Vertiv),0.7,0.3
+VRTX,stock,long,Healthcare (Vertex),0.5,0.5
+WM,stock,long,Industrials (Waste Management),0.3,0.7
+WMT,stock,long,Consumer Defensive (Walmart),0.3,0.7
+WPC,stock,long,REIT (W.P. Carey),0.3,0.7
+XLG,etf,long,S&P 500 Top 50,0.5,0.5
+XME,etf,long,Metals & Mining,0.8,0.2
+XOM,stock,long,Energy (ExxonMobil),0.6,0.4

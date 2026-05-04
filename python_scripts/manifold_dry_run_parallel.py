@@ -611,6 +611,7 @@ class TripleThreatProblem(ElementwiseProblem):
 
 
 def get_triple_threat_params(
+        periods,
         momentum_file = "simulation_data/momentum.nc", 
         quality_file = "simulation_data/quality.nc",
         gic_file = "simulation_data/gic_data.nc",
@@ -652,10 +653,7 @@ def get_triple_threat_params(
         'start_date': pd.to_datetime('Jan 1, 2005'), 'end_date': pd.Timestamp.now()
     }
     
-    training_periods = {
-        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
-        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
-    }
+    
 
     print("Initializing problem kits...")
     df_man = pd.read_csv(manifold_file)
@@ -677,7 +675,11 @@ def get_triple_threat_params(
 
 def main():
    
-    problem_args = get_triple_threat_params(holdings_folder = HOLDINGS_FOLDER, eval_folder = EVAL_FOLDER)    
+    periods = {
+        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
+        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
+    }
+    problem_args = get_triple_threat_params(periods, holdings_folder = HOLDINGS_FOLDER, eval_folder = EVAL_FOLDER)    
         
     
 

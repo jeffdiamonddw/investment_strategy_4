@@ -377,6 +377,7 @@ def sample_bounded_vector(xl, xu, mean_factor=0.5, std_factor=0.25):
 
 
 def get_pareto_nav_params(
+        periods,
         momentum_file = "simulation_data/momentum.nc", 
         quality_file = "simulation_data/quality.nc",
         gic_file = "simulation_data/gic_data.nc",
@@ -389,6 +390,7 @@ def get_pareto_nav_params(
     ):
 
     triple_threat_params = get_triple_threat_params(
+        periods,
         momentum_file = momentum_file,
         quality_file = quality_file,
         gic_file = gic_file,
@@ -448,8 +450,12 @@ def get_pareto_nav_params(
 
 if __name__ == "__main__":
 
-    
-    problem_args = get_pareto_nav_params(star_file = STAR_FILE)
+    periods = {
+        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
+        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
+    }
+
+    problem_args = get_pareto_nav_params(periods, star_file = STAR_FILE)
     xl, xu = problem_args[-2:]
 
     var_count = 17

@@ -70,8 +70,14 @@ VAR_COLS = [
 ]
 
 
-import numpy as np
-import pandas as pd
+
+
+import logging
+
+
+# Setup basic logging to stdout (which AWS Batch sends to CloudWatch)
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger("TripleThreatMonitor")
 
 def generate_perturbations(df_seeds, n_required, xl, xu, var_cols = VAR_COLS, noise_scale=0.05):
     """
@@ -243,6 +249,7 @@ class HighThroughputBatchManager(Problem):
         pending = range(X.shape[0])
         while len(pending) > 0:
             
+            logger.info("{} jobs are pending".format(len(pending)))
             # 2. Push tasks to the fleet
             num_to_submit = min(self.num_workers, len(pending))
             jobs_to_submit = pending[:num_to_submit]

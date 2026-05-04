@@ -86,15 +86,24 @@ if __name__ == "__main__":
     param_cols = ["p_{}".format(i) for i in range(17)]
     X_initial = df_starting_pop[param_cols].values
     
-    pareto_nav_args = get_pareto_nav_params(holdings_folder = HOLDINGS_FOLDER,  eval_folder = EVAL_FOLDER, star_file = STAR_FILE)
-    xl, xu = pareto_nav_args[-2:]
+    periods = {
+        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
+        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
+    }
+    problem_args = get_pareto_nav_params(
+        periods, 
+        star_file = STAR_FILE,
+        holdings_folder = HOLDINGS_FOLDER,
+        eval_folder = EVAL_FOLDER
+    )
+    xl, xu = problem_args[-2:]
     
     
     problem = RobustParallelManager(
             num_workers=NUM_WORKERS,
             timeout_sec=TIMEOUT_SEC,
             workhorse_cls=RobustMedianEvaluator, # The wrapper class
-            workhorse_args= (ParetoNavigator, pareto_nav_args, 5, 0.01),      # The 'Wrapped' class + Sim Args
+            workhorse_args= (ParetoNavigator, problem_args, 5, 0.01),      # The 'Wrapped' class + Sim Args
             var_count=17,
             obj_count=2,
             xl = xl,
