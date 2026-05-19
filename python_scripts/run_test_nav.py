@@ -14,26 +14,26 @@ import fsspec
 from pymoo.core.problem import Problem
 import multiprocessing as mp
 
-from triple_threat import *
+from manifold_dry_run_parallel import *
 from pareto_navigator import *
 from run_perturbations import *
 
-# Reuse your existing classes and utilities from triple_threat.py
+# Reuse your existing classes and utilities from manifold_dry_run_parallel.py
 # (Assuming TripleThreatProblem and RobustParallelManager are available)
 
 # --- CONFIGURATION FOR PERTURBATION ---
 
-NUM_PERTURBATIONS = 1000
+NUM_PERTURBATIONS = 100
 NOISE_SCALE = 0.01  # 5% COEFF VAR
-NUM_WORKERS = 94
-TARGET_COMPLETIONS = 90
+NUM_WORKERS = 1
+TARGET_COMPLETIONS = 1
 TIMEOUT = 180
 EVAL_FOLDER = "s3://jdinvestment/perturbation_evaluations_nav_median"
 HOLDINGS_FOLDER = "s3://jdinvestment/perturbation_holdings_nav_median"
 PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_nav_median"
 
 PARETO_INPUT_FILE = "analysis/stars.csv"
-STAR_FILE = 'temp/median_nav_pareto_0.csv'
+STAR_FILE = 'analysis/best_pareto_nav_solution.csv'
 MOMENTUM_FILE = "simulation_data/momentum.nc"
 QUALITY_FILE = "simulation_data/quality.nc"
 GIC_FILE = "simulation_data/gic_data.nc"
@@ -55,21 +55,27 @@ if __name__ == "__main__":
     print("--- START ---")
 
     periods = {
-        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
-        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
+        '2013': {'train_start_date': pd.to_datetime('Jan 1, 2011'), 'end_date': pd.to_datetime('Jan 1, 2020')},
+        '2025': {'train_start_date': pd.to_datetime('Jan 1, 2023'), 'end_date': pd.to_datetime('April 20, 2026')}
+    }
+    tickers = list(np.array(xr.open_dataarray(MOMENTUM_FILE).symbol)) + ['GIC']
+    objective_functions_dict = {
+        '2013_drawdown': functools.partial(drawdown_integral, pd.to_datetime('Jan 1, 2013'), pd.to_datetime('Jan 1, 2020'), tickers),
+        '2025_drawdown': functools.partial(drawdown_integral, pd.to_datetime('Jan 1, 2025'), pd.to_datetime('April 20, 2026'), tickers),
+        '2013_worst_annual': functools.partial(pct_change_quantile, pd.to_datetime('Jan 1, 2013'), pd.to_datetime('Jan 1, 2020'), tickers, 1/13),
+        '2025_worst_annual': functools.partial(pct_change_quantile, pd.to_datetime('Jan 1, 2025'), pd.to_datetime('April 20, 2026'), tickers, 1/13),
+        '2013_annualized': functools.partial(annualized_return, pd.to_datetime('Jan 1, 2013'), pd.to_datetime('Jan 1, 2020'), tickers),
+        '2025_annuialized': functools.partial(annualized_return, pd.to_datetime('Jan 1, 2025'), pd.to_datetime('April 20, 2026'), tickers),
     }
     problem_args = get_pareto_nav_params(
         periods, 
-        star_file = STAR_FILE,
+        objective_functions_dict,
+        star_file = PARETO_INPUT_FILE,
         holdings_folder = HOLDINGS_FOLDER,
         eval_folder = EVAL_FOLDER
     )
+    xl, xu = problem_args[-2:]
     
-    
-    
-    var_count = 17
-    obj_count = len(objective_sense)
-
     df_star = pd.read_csv(STAR_FILE)
 
     # Generate 10,000 samples around Pareto seeds

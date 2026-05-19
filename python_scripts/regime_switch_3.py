@@ -22,19 +22,14 @@ from pymoo.optimize import minimize
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.population import Population
 
-# Import custom logic from explore_cluster.py
-from explore_cluster import (
-    simulate, 
-    optimize, 
-    interpolate_to_4week_grid, 
-    get_gic_eps,
-    SuppressOutput
-)
+# Import custom logic 
+from explore_cluster import simulate, interpolate_to_4week_grid, get_gic_eps, SuppressOutput
+
 
 # --- REGIME-SWITCHING PROBLEM CLASS ---
 
 class RegimeSwitchingProblem(ElementwiseProblem):
-    def __init__(self, mom_kit, qual_kit, df_macro, data_features, df_price, params, training_periods, holdings_file, xl=None, xu=None):
+    def __init__(self, mom_kit, qual_kit, df_macro, data_features, df_price, params, training_periods, holdings_file, xl=None, xu=None, holdings = None):
         self.mom_kit = mom_kit
         self.qual_kit = qual_kit
         self.df_macro = df_macro
@@ -43,6 +38,7 @@ class RegimeSwitchingProblem(ElementwiseProblem):
         self.params = params
         self.training_periods = training_periods
         self.holdings_file = holdings_file
+        self.holdings = holdings
         
         # Output file paths
         self.eval_history_file = "sim_results/regime_eval_history.csv"
@@ -118,18 +114,22 @@ class RegimeSwitchingProblem(ElementwiseProblem):
 
         out["F"] = [f1, f2, f3, -f4, -f5]
 
-    def run_blended_sim(self, w_mom_vals, w_qual_vals, threshold, beta, mom_decay, qual_decay, macro_weights, period_key, sim_id, session = None):
+    def run_blended_sim(self, w_mom_vals, w_qual_vals, threshold, beta, mom_decay, qual_decay, macro_weights, period_key, sim_id, session = None, holdings = None):
         period = self.training_periods[period_key]
         
         
-        s_risk_aversion = self.df_macro.loc[period['train_start_date']:period['end_date']].dot(macro_weights).rename("risk_aversion")   
+        s_risk_aversion_full = self.df_macro.dot(macro_weights).rename("risk_aversion") 
+        risk_aversion_mean = s_risk_aversion_full.mean()
+        s_risk_aversion = s_risk_aversion_full.loc[
+            (self.df_macro.index >= period['val_start_date']) & (self.df_macro.index <= period['end_date'])
+        ]  
         
         
         s_quality_weight = 1 / (1 + np.exp(-beta * (s_risk_aversion - threshold)))
         mom_num_periods = np.array([int(col.split('_')[-1][:-1]) for col in self.mom_kit['columns']])
         qual_num_periods = np.array([int(col.split('_')[-1][:-1]) for col in self.qual_kit['columns']])
-        df_mom_decay = pd.DataFrame(np.exp(- mom_decay * (s_risk_aversion.mean() - s_risk_aversion).values[:, None] * mom_num_periods), index=s_risk_aversion.index, columns = self.mom_kit['columns'])
-        df_qual_decay = pd.DataFrame(np.exp(- qual_decay * (s_risk_aversion.mean() - s_risk_aversion).values[:, None] * qual_num_periods), index=s_risk_aversion.index, columns = self.qual_kit['columns'])
+        df_mom_decay = pd.DataFrame(np.exp(- mom_decay * (risk_aversion_mean - s_risk_aversion).values[:, None] * mom_num_periods), index=s_risk_aversion.index, columns = self.mom_kit['columns'])
+        df_qual_decay = pd.DataFrame(np.exp(- qual_decay * (risk_aversion_mean - s_risk_aversion).values[:, None] * qual_num_periods), index=s_risk_aversion.index, columns = self.qual_kit['columns'])
         
         
         w_dict = {}
@@ -139,16 +139,9 @@ class RegimeSwitchingProblem(ElementwiseProblem):
         df_mom_weights = df_mom_decay.mul(df_mom.iloc[0], axis=1).mul(1 - s_quality_weight, axis=0)
         df_qual_weights = df_qual_decay.mul(df_qual.iloc[0], axis=1).mul(s_quality_weight, axis=0)
         df_weights = pd.concat([df_mom_weights, df_qual_weights], axis = 1)
-        h_raw, df_holdings = simulate(self.df_price, self.params, self.data_features, df_weights, period, self.holdings_file, sim_id, session = session)
-        
-        # Log detailed output with sim_id for matching
-        #df_h = pd.DataFrame(h_raw, columns=['date', 'symbol', 'price', 'capital'])
-        #df_h['sim_id'], df_h['regime'], df_h['s_blend'] = sim_id, period_key, s_val
-        #df_h.to_csv(self.detailed_sim_file, mode='a', index=False, header=not os.path.exists(self.detailed_sim_file))
+        df_holdings = simulate(self.df_price, self.params, self.data_features, df_weights, period, self.holdings_file, sim_id, session = session, holdings = holdings)
         
         
-        #boom_eval = h_raw[-1][3]
-        #perc_10_diff_eval = np.percentile(np.diff(df_h.capital)/df_h.capital[:-1], 100/13)
         return df_holdings
     
 
@@ -163,5 +156,5 @@ class RegimeSwitchingProblem(ElementwiseProblem):
         self.run_blended_sim(w_mom_vals, w_qual_vals, threshold, beta, 'boom', sim_id)
         
 
-# --- MAIN EXECUTION ---
+
 

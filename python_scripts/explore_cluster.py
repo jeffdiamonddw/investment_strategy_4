@@ -151,7 +151,7 @@ def optimize(_params , df_features, current_price, holdings, budget, feature_wei
     _investment = np.matmul(pd.DataFrame(params['current_price']).loc[params['current_price'].index != 'GIC'].transpose().values, df_sol.loc[df_sol.index != 'GIC'].values)
     num_trades = (df_sol != params['holdings']).values.sum()
     df_sol = df_sol.astype('float')
-    df_sol.loc['GIC', :] = (params['budget'] - _investment - float(params['trade_fee'] * num_trades))
+    df_sol.loc['GIC', :] = (params['budget'] - _investment - float(params['trade_fee'] * num_trades)).flatten()
     df_sol = pd.concat([df_sol, pd.DataFrame(0, index = drop_stock_list, columns = df_sol.columns)]).loc[holdings.index]
     return df_sol, num_trades * params['trade_fee'], obj_value
 
@@ -193,24 +193,41 @@ def save_result_agnostic(df, path, session = None):
         
         
         
-def simulate(df_price, _params, data_features, df_weights, training_period, holdings_outfile, sim_id = None, session = None):
+def simulate(df_price, _params, data_features, df_weights, training_period, holdings_outfile, sim_id = None, session = None, holdings = None):
     params = _params.copy()
     params.update(training_period)
-    train_start_dates = [d for d in df_price if params['train_start_date'] <= d <= params['end_date'] - pd.Timedelta(weeks = params['feature_horizon_weeks'])]
-    train_end_dates = [d + pd.Timedelta(weeks = params['feature_horizon_weeks']) for d in train_start_dates]
-    time_tups = list(zip(train_end_dates, [d + pd.Timedelta(weeks = 4) for d in train_end_dates]))
+    val_start_dates = df_weights.index[:-1]
+    val_end_dates = df_weights.index[1:]
+    time_tups = list(zip(val_start_dates, val_end_dates))
     
-    holdings = pd.DataFrame(0.0, index = df_price.index, columns = range(len(params['principal'])))
-    holdings.loc['GIC', :] = params['principal']
+    if holdings is None:
+        holdings = pd.DataFrame(0.0, index = df_price.index, columns = range(len(params['principal'])))
+        holdings.loc['GIC', :] = params['principal']
+
+    
+    
     history = []
     df_holdings_history = pd.DataFrame()
-
+    df_holdings_shares = pd.DataFrame()
     for val_start_date, val_end_date in time_tups:
+        
+        holdings_shares = pd.DataFrame((holdings.sum(axis = 1))).transpose()
+        holdings_shares.loc[:, 'date'] = val_start_date
+        df_holdings_shares = pd.concat([df_holdings_shares, holdings_shares])
+        
+    
+        # df_holdings = pd.read_csv('temp/holdings_shares.csv').set_index('date')
+        # df_holdings.index = pd.to_datetime(df_holdings.index)
+        # holdings = pd.DataFrame(df_holdings.loc[val_start_date])
+        # holdings.columns = range(holdings.shape[1])
+        
+        
         current_price = df_price.loc[:, val_start_date].copy(); current_price.loc['GIC'] = 1
         budget = (holdings.values * pd.DataFrame(current_price).fillna(0).values).sum(axis = 0)
         df_features = data_features.sel(date = val_start_date).to_pandas().transpose()
         feature_weights = dict(df_weights.loc[val_start_date])
         holdings, _, _ = optimize(params, df_features, current_price, holdings, budget, feature_weights)
+        
         holdings_out = pd.DataFrame((holdings.sum(axis = 1).values * current_price)).transpose().reset_index().rename(columns = {'index': 'date'})
         holdings_out.loc[:, 'sim_id'] = sim_id
 
@@ -218,19 +235,25 @@ def simulate(df_price, _params, data_features, df_weights, training_period, hold
         
         
 
-        gic_multiplier = 1 + np.array(data_features.sel(symbol = 'GIC', date = val_end_date, band = 'dollar_ret_1p'))
+        if val_end_date in data_features.date:
+            gic_multiplier = 1 + np.array(data_features.sel(symbol = 'GIC', date = val_end_date, band = 'dollar_ret_1p'))
+        else:
+            gic_multiplier = 1.025**(1/13)
+
         stocks = sorted(list(set(holdings.index).difference(['GIC'])))
         v_start = (holdings.loc[stocks] * df_price.loc[stocks, [val_start_date]].values).sum(axis=0) + holdings.loc['GIC']
         v_end = (holdings.loc[stocks] * df_price.loc[stocks, [val_end_date]].values).sum(axis=0) + gic_multiplier * holdings.loc['GIC']
         history.append((val_start_date, val_end_date, v_start.sum(), v_end.sum()))
-        print(sim_id, val_start_date, val_end_date, v_start.sum(), v_end.sum(), flush = True)  
-
+        gic_frac = holdings.loc['GIC'].values.sum()/v_start.sum()
+        print(sim_id, val_start_date, val_end_date, v_start.sum(), v_end.sum(), gic_frac, flush = True)
+        
     stagger_delay = (sim_id % 5000) / 1000.0
     time.sleep(stagger_delay)
     save_result_agnostic(df_holdings_history, holdings_outfile, session = session)
     
-
-    return history, df_holdings_history
+    #df_holdings_shares.to_csv('temp/holdings_shares.csv', index = False)
+    
+    return df_holdings_history
 
 def get_gic_eps(data_gic):
     df_gic = data_gic.sel(symbol = 'GIC').to_pandas().transpose().iloc[:, 1:]

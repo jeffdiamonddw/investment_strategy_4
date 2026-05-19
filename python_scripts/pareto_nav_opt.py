@@ -1,3 +1,7 @@
+import time, random
+import os
+import functools
+
 import numpy as np
 import pandas as pd
 from pymoo.core.problem import ElementwiseProblem
@@ -5,29 +9,32 @@ from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.population import Population
 
 from triple_threat import RobustParallelManager, load_checkpoint, save_checkpoint
-from pareto_navigator import ParetoNavigator, get_pareto_nav_params
+from pareto_navigator import ParetoNavigator, get_pareto_nav_params, mean_annual_drawdown_integral, annualized_return, pct_change_quantile, worst_annual_return
 
   
 
 
 
+TICKER_FILE = "strategy/multi_dim_stock_list.csv"
+HOLDINGS_FOLDER = "s3://jdinvestment/nav_median_holdings"
+EVAL_FOLDER = "s3://jdinvestment/nav_median_evaluations"
+STAR_FILE = 'analysis/pareto_17_year_stars.csv'
+CHECKPOINT_URI = "s3://jdinvestment/checkpoints/nav_median_checkpoint_6"
+POP_SIZE = 180
+N_OFFSPRING = 188
+NUM_WORKERS = 94
+TARGET_COMPLETIONS = 90
+GEN_COUNT = 150
+TIMEOUT_SEC = 180 * 3
+OUT_FOLDER = "s3://jdinvestment/nav_median_output"
 
-HOLDINGS_FOLDER = "s3://jdinvestment/robust_mean_nav_holdings"
-EVAL_FOLDER = "s3://jdinvestment/robust_mean_nav_evaluations"
-STAR_FILE = 'analysis/stars.csv'
-INITIAL_POP_FILE = "temp/robust_mean_starting_pop.csv"
-CHECKPOINT_URI = "s3://jdinvestment/checkpoints/robust_mean_nav_checkpoint_1"
-POP_SIZE = 1
-N_OFFSPRING = 1
-NUM_WORKERS = 1
-TARGET_COMPLETIONS = 1
-GEN_COUNT = 2
-TIMEOUT_SEC = 180
-OUT_FOLDER = "s3://jdinvestment/robust_mean_nav_means"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
 
-
-
-class RobustMeanEvaluator(ElementwiseProblem):
+class RobustMedianEvaluator(ElementwiseProblem):
     def __init__(self, workhorse_cls, workhorse_args, n_samples=5, perturbation_cv=0.01, out_folder = OUT_FOLDER):
         """
         An 'Abstract-Aware' wrapper. It stores the CLASS of the simulation 
@@ -39,6 +46,11 @@ class RobustMeanEvaluator(ElementwiseProblem):
         self.perturbation_cv = perturbation_cv
         self.workhorse_args = workhorse_args
         self.out_folder = out_folder
+        if 'navigator' in str(workhorse_cls):
+            self.obj_cols = list(workhorse_args[-4].keys())
+        else:
+            self.obj_cols = list(workhorse_args[-3].keys())
+
         
         # 2. Inherit dimensions from the actual simulation
         super().__init__(
@@ -63,30 +75,59 @@ class RobustMeanEvaluator(ElementwiseProblem):
             self.local_sim._evaluate(perturbed_x, sample_out, *args, **kwargs)
             results.append(sample_out["F"])
 
-        mean_result = np.mean(results, axis=0)
+        median_result = np.median(results, axis=0)
         param_cols = ["p_{}".format(i) for i in range(len(x))]
-        objective_cols = list(self.workhorse_args[-3].keys())
-        df_out = pd.DataFrame([[sim_id] + list(-mean_result) + list(x)], columns = ['sim_id'] + objective_cols + param_cols)
+        objective_cols = self.obj_cols
+        df_out = pd.DataFrame([[sim_id] + list(-median_result) + list(x)], columns = ['sim_id'] + objective_cols + param_cols)
+        time.sleep(random.uniform(0, 5))
         df_out.to_csv("{}/{}.csv".format(self.out_folder, sim_id))    
-        out["F"] = mean_result
+        out["F"] = median_result
 
 
 
 if __name__ == "__main__":
 
-    df_starting_pop = pd.read_csv(INITIAL_POP_FILE)
-    param_cols = ["p_{}".format(i) for i in range(17)]
-    X_initial = df_starting_pop[param_cols].values
-    
-    pareto_nav_args = get_pareto_nav_params(holdings_folder = HOLDINGS_FOLDER,  eval_folder = EVAL_FOLDER, star_file = STAR_FILE)
-    xl, xu = pareto_nav_args[-2:]
+    periods = {
+        '17_year': {'train_start_date': pd.to_datetime('Jan 1, 2005'), 'val_start_date': pd.to_datetime('Jan 1, 2008'), 'end_date': pd.to_datetime('Jan 1, 2025')},
+    }
+    weight_cols = [
+        'dollar_ret_1p', 'dollar_ret_6p', 'dollar_ret_13p',
+       'dollar_ret_26p', 'avg_eps_1q', 'avg_eps_2q', 'avg_eps_4q',
+       'avg_eps_8q', 'threshold', 'beta', 'mom_decay', 'qual_decay',
+       'macro_weights_0', 'macro_weights_1', 'macro_weights_2',
+       'macro_weights_3'
+    ]
+    tickers = list(pd.read_csv(TICKER_FILE).symbol) + ['GIC']
+    objective_functions_dict = {
+        'worst_annual_return': functools.partial(worst_annual_return, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'drawdown_integral': functools.partial(mean_annual_drawdown_integral, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'annualized_return': functools.partial(annualized_return, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'worst_annual_4wk': functools.partial(pct_change_quantile, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers, 1/13),
+    }
+    objective_sense = {'drawdown_integral': 'min', 'annualized_return': 'max'}
+
+    problem_args = get_pareto_nav_params(
+        periods,
+        weight_cols,
+        objective_functions_dict,
+        objective_sense,
+        momentum_file = "simulation_data/momentum.nc", 
+        quality_file = "simulation_data/quality.nc",
+        gic_file = "simulation_data/gic_data.nc",
+        macro_file = "simulation_data/macro_signals.csv",
+        manifold_file = "sim_results/manifold_triple_threat.csv",
+        holdings_folder = HOLDINGS_FOLDER,
+        eval_folder = EVAL_FOLDER,
+        star_file = STAR_FILE
+    )
+    xl, xu = problem_args[-3:-1]
     
     
     problem = RobustParallelManager(
             num_workers=NUM_WORKERS,
             timeout_sec=TIMEOUT_SEC,
-            workhorse_cls=RobustMeanEvaluator, # The wrapper class
-            workhorse_args= (ParetoNavigator, pareto_nav_args, 5, 0.01),      # The 'Wrapped' class + Sim Args
+            workhorse_cls=RobustMedianEvaluator, # The wrapper class
+            workhorse_args= (ParetoNavigator, problem_args, 3, 0.01),      # The 'Wrapped' class + Sim Args
             var_count=17,
             obj_count=2,
             xl = xl,
@@ -109,7 +150,7 @@ if __name__ == "__main__":
         algorithm = NSGA2(
             pop_size=POP_SIZE,
             n_offsprings=N_OFFSPRING,
-            sampling = X_initial[:POP_SIZE],
+            #sampling = X_initial[:POP_SIZE],
             eliminate_duplicates=True
         )
         algorithm.setup(problem, termination=('n_gen', GEN_COUNT), seed=1)

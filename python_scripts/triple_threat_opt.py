@@ -1,3 +1,4 @@
+import functools
 import time, random
 import os
 
@@ -6,27 +7,30 @@ import pandas as pd
 from pymoo.core.problem import ElementwiseProblem
 from pymoo.algorithms.moo.nsga2 import NSGA2
 from pymoo.core.population import Population
+from pymoo.operators.sampling.rnd import FloatRandomSampling
 
-from manifold_dry_run_parallel import RobustParallelManager, load_checkpoint, save_checkpoint
-from pareto_navigator import ParetoNavigator, get_pareto_nav_params
+
+
+from triple_threat import RobustParallelManager, load_checkpoint, save_checkpoint
+from pareto_navigator import ParetoNavigator, mean_annual_drawdown_integral, annualized_return, pct_change_quantile, worst_annual_return
+from triple_threat import get_triple_threat_params, TripleThreatProblem
 
   
 
 
 
-
-HOLDINGS_FOLDER = "s3://jdinvestment/robust_median_nav_holdings_4"
-EVAL_FOLDER = "s3://jdinvestment/robust_median_nav_evaluations_4"
-STAR_FILE = 'analysis/stars.csv'
-INITIAL_POP_FILE = "temp/robust_mean_starting_pop.csv"
-CHECKPOINT_URI = "s3://jdinvestment/checkpoints/robust_median_nav_checkpoint_4"
+TICKER_FILE = "strategy/multi_dim_stock_list.csv"
+HOLDINGS_FOLDER = "s3://jdinvestment/median_17_year_holdings"
+EVAL_FOLDER = "s3://jdinvestment/median_17_year_evaluations"
+INITIAL_POP_FILE = "analysis/top_ranked.csv"
+CHECKPOINT_URI = "s3://jdinvestment/checkpoints/median_17_year_checkpoint"
 POP_SIZE = 180
 N_OFFSPRING = 188
 NUM_WORKERS = 94
 TARGET_COMPLETIONS = 90
 GEN_COUNT = 150
-TIMEOUT_SEC = 180 * 5
-OUT_FOLDER = "s3://jdinvestment/robust_nav_medians_4"
+TIMEOUT_SEC = 180 * 3
+OUT_FOLDER = "s3://jdinvestment/median_17_year_output"
 
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -83,18 +87,49 @@ class RobustMedianEvaluator(ElementwiseProblem):
 if __name__ == "__main__":
 
     df_starting_pop = pd.read_csv(INITIAL_POP_FILE)
-    param_cols = ["p_{}".format(i) for i in range(17)]
-    X_initial = df_starting_pop[param_cols].values
+    df_pop = df_starting_pop.loc[df_starting_pop['rank'] == 0]
+
+
+    weight_cols = [
+        'dollar_ret_1p', 'dollar_ret_6p', 'dollar_ret_13p',
+       'dollar_ret_26p', 'avg_eps_1q', 'avg_eps_2q', 'avg_eps_4q',
+       'avg_eps_8q', 'threshold', 'beta', 'mom_decay', 'qual_decay',
+       'macro_weights_0', 'macro_weights_1', 'macro_weights_2',
+       'macro_weights_3'
+    ]
+
+    X_initial = df_pop[weight_cols].values
+    initial_pop = Population.new("X", X_initial)
     
     periods = {
-        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
-        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
+        '17_year': {'train_start_date': pd.to_datetime('Jan 1, 2005'), 'val_start_date': pd.to_datetime('Jan 1, 2008'), 'end_date': pd.to_datetime('Jan 1, 2025')},
     }
-    problem_args = get_pareto_nav_params(
-        periods, 
-        star_file = STAR_FILE,
+    
+    
+    tickers = list(pd.read_csv(TICKER_FILE).symbol) + ['GIC']
+    objective_functions_dict = {
+        'worst_annual_return': functools.partial(worst_annual_return, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'drawdown_integral': functools.partial(mean_annual_drawdown_integral, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'annualized_return': functools.partial(annualized_return, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'worst_annual_4wk': functools.partial(pct_change_quantile, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers, 1/13),
+    }
+    objective_sense = {'drawdown_integral': 'min', 'annualized_return': 'max', 'worst_annual_4wk': 'max'}
+
+
+    problem_args = get_triple_threat_params(
+        periods,
+        weight_cols, 
+        objective_functions_dict, 
+        objective_sense,
+        momentum_file = "simulation_data/momentum.nc", 
+        quality_file = "simulation_data/quality.nc",
+        gic_file = "simulation_data/gic_data.nc",
+        macro_file = "simulation_data/macro_signals.csv",
+        manifold_file = "sim_results/manifold_triple_threat.csv",
         holdings_folder = HOLDINGS_FOLDER,
         eval_folder = EVAL_FOLDER
+
+
     )
     xl, xu = problem_args[-2:]
     
@@ -103,13 +138,13 @@ if __name__ == "__main__":
             num_workers=NUM_WORKERS,
             timeout_sec=TIMEOUT_SEC,
             workhorse_cls=RobustMedianEvaluator, # The wrapper class
-            workhorse_args= (ParetoNavigator, problem_args, 5, 0.01),      # The 'Wrapped' class + Sim Args
-            var_count=17,
-            obj_count=2,
+            workhorse_args= (TripleThreatProblem, problem_args, 3, 0.01),      # The 'Wrapped' class + Sim Args
+            var_count=16,
+            obj_count=3,
             xl = xl,
             xu = xu,
             target_completions = TARGET_COMPLETIONS
-        )
+    )
     
 
     # Attempt to load existing progress
@@ -126,7 +161,7 @@ if __name__ == "__main__":
         algorithm = NSGA2(
             pop_size=POP_SIZE,
             n_offsprings=N_OFFSPRING,
-            sampling = X_initial[:POP_SIZE],
+            sampling = initial_pop,
             eliminate_duplicates=True
         )
         algorithm.setup(problem, termination=('n_gen', GEN_COUNT), seed=1)

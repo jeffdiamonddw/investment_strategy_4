@@ -90,7 +90,7 @@ def get_ranked_subset(df, objective_cols, senses, n_required):
 
 if __name__ == "__main__":
 
-    database_name = table_name = "robust_nav_medians_4"
+    database_name = table_name = "nav_median_output"
     # Read the table metadata and data using the Glue catalo
 
     df = wr.s3.read_parquet_table(
@@ -102,8 +102,20 @@ if __name__ == "__main__":
     #senses = ['min', 'max', 'max']
     #obj_columns = ['drawdown', 'f4_terminal', 'f5_annual_worst']
 
-    obj_columns = ['boom', 'crash']
-    senses = ['max', 'max']
+    weight_cols = [
+        'dollar_ret_1p', 'dollar_ret_6p', 'dollar_ret_13p',
+       'dollar_ret_26p', 'avg_eps_1q', 'avg_eps_2q', 'avg_eps_4q',
+       'avg_eps_8q', 'threshold', 'beta', 'mom_decay', 'qual_decay',
+       'macro_weights_0', 'macro_weights_1', 'macro_weights_2',
+       'macro_weights_3'
+    ]
+    p_cols = ["p_{}".format(i) for i in range(16)]
+
+
+    obj_columns = ['drawdown_integral', 'annualized_return']
+    senses = ['min', 'max']
     df_ranked = get_ranked_subset(df, obj_columns, senses, 500)
 
-    df_ranked.to_csv('analysis/top_ranked_pareto_nav_median.csv')
+    df_ranked = df_ranked.rename(columns = dict(zip(p_cols, weight_cols)))
+
+    df_ranked.to_csv('analysis/top_ranked_17_year_nav.csv')

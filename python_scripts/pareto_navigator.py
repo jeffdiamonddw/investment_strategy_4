@@ -11,7 +11,7 @@ from scipy.spatial.distance import pdist, squareform
 
 # Ensure these are imported from your local environment
 from explore_cluster import save_result_agnostic, simulate, get_gic_eps
-from manifold_dry_run_parallel import build_kit, RobustParallelManager, load_checkpoint, save_checkpoint, get_triple_threat_params 
+from triple_threat import build_kit, RobustParallelManager, load_checkpoint, save_checkpoint, get_triple_threat_params 
 
 
 STAR_FILE = 'analysis/stars.csv'
@@ -71,7 +71,90 @@ def get_greedy_path_indices(df, objective_cols):
     return path
 
 
+import pandas as pd
+import numpy as np
 
+import pandas as pd
+import numpy as np
+from functools import partial
+
+def resilience_integral(
+    df, 
+    ticker_cols, 
+    start_date, 
+    end_date, 
+    window_months=6, 
+    clip_min=-2.0, 
+    clip_max=2.0, 
+    epsilon=1e-6
+):
+    """
+    Core logic: Calculates the area under the risk-adjusted recovery curve.
+    """
+    # 1. Calculate Total Portfolio Value
+    portfolio_value = df[ticker_cols].sum(axis=1)
+    
+    # 2. Define trading window (approx 21 days per month)
+    window_days = window_months * 21
+    
+    # 3. Calculate Rolling 6-month Return
+    rolling_ret = portfolio_value.pct_change(periods=window_days)
+    
+    # 4. Calculate Rolling 6-month Max Drawdown
+    rolling_peak = portfolio_value.rolling(window=window_days, min_periods=window_days).max()
+    drawdown = (portfolio_value - rolling_peak) / rolling_peak
+    rolling_mdd = drawdown.rolling(window=window_days, min_periods=window_days).min()
+    
+    # 5. Compute the Resilience Ratio
+    resilience_ratio = rolling_ret / (np.abs(rolling_mdd) + epsilon)
+    
+    # 6. Filter to evaluation period, Clip, and Integrate
+    eval_slice = resilience_ratio.loc[start_date:end_date]
+    clipped_series = np.clip(eval_slice, clip_min, clip_max).fillna(0)
+    
+    # Return the scalar (Area Under Curve)
+    return np.trapz(clipped_series.values)
+
+# --- THE WRAPPER FOR PYMOO / FUNCTOOLS ---
+
+def get_resilience_objective_func(ticker_columns, start, end, **kwargs):
+    """
+    Returns a partial function that takes ONLY 'df' as an argument.
+    """
+    return partial(
+        resilience_integral, 
+        ticker_cols=ticker_columns, 
+        start_date=start, 
+        end_date=end,
+        **kwargs
+    )
+
+
+
+
+
+# 2. Inside your pymoo _evaluate or your 5-perturbation loop:
+# result_scalar = resilience_objective(df_from_simulation)
+
+
+def worst_annual_return(start_date, end_date, ticker_cols, df):
+    df1 = df.sort_values(by = 'date')
+    df1 = pd.DataFrame({
+        'year': df.date.dt.year,
+        'value': df.loc[(df.date >= start_date) & (df.date <= end_date), ticker_cols].sum(axis = 1)
+    })
+    df2 = df1.groupby('year').agg(lambda x: (x.values[-1]/x.values[0])**(len(x)/13)) - 1
+    return df2['value'].min()
+
+
+def mean_annual_drawdown_integral(start_date, end_date, ticker_cols, df):
+    df1 = df.sort_values(by = 'date')
+    df1 = pd.DataFrame({
+        'year': df.date.dt.year,
+        'value': df.loc[(df.date >= start_date) & (df.date <= end_date), ticker_cols].sum(axis = 1)
+    })
+    df2 = df1.groupby('year').agg(lambda x: np.maximum(0, x.values[0] - x.values).sum())
+    return df2['value'].mean()
 
 
 def drawdown_integral(start_date, end_date, ticker_cols, df):
@@ -106,7 +189,7 @@ class ParetoNavigator(ElementwiseProblem):
     
     def __init__(self, 
                  mom_kit, qual_kit, df_macro, data_features, df_price, params, training_periods, holdings_folder, eval_folder, 
-                 df_stars, weight_columns, objective_functions_dict, objective_sense, xl, xu):
+                  weight_columns, objective_functions_dict, objective_sense, xl, xu, df_stars):
         """
         17-Parameter Navigator [Jeff Diamond Analytics]
         
@@ -330,8 +413,11 @@ class ParetoNavigator(ElementwiseProblem):
             da_final_weights = (da_blending * da_stars).sum(dim='star')
             df_weights = da_final_weights.to_pandas()
 
+            if period_key == '2025':
+                zzz=1
+                
             # 5. Simulation execution
-            _, df_h = simulate(self.df_price, self.params, self.data_features, df_weights, 
+            df_h = simulate(self.df_price, self.params, self.data_features, df_weights, 
                                self.training_periods[period_key], self.holdings_folder, sim_id)
             sim_results.append(df_h)
             
@@ -378,6 +464,9 @@ def sample_bounded_vector(xl, xu, mean_factor=0.5, std_factor=0.25):
 
 def get_pareto_nav_params(
         periods,
+        weight_columns,
+        objective_functions_dict,
+        objective_sense,
         momentum_file = "simulation_data/momentum.nc", 
         quality_file = "simulation_data/quality.nc",
         gic_file = "simulation_data/gic_data.nc",
@@ -391,25 +480,21 @@ def get_pareto_nav_params(
 
     triple_threat_params = get_triple_threat_params(
         periods,
-        momentum_file = momentum_file,
-        quality_file = quality_file,
-        gic_file = gic_file,
-        manifold_file = manifold_file,
-        holdings_folder =  holdings_folder, 
-        eval_folder = eval_folder
+        weight_columns, 
+        objective_functions_dict, 
+        objective_sense,
+        momentum_file = "simulation_data/momentum.nc", 
+        quality_file = "simulation_data/quality.nc",
+        gic_file = "simulation_data/gic_data.nc",
+        macro_file = "simulation_data/macro_signals.csv",
+        manifold_file = "sim_results/manifold_triple_threat.csv",
+        holdings_folder = HOLDINGS_FOLDER,
+        eval_folder = EVAL_FOLDER,
     )
-    data_features = triple_threat_params[3]
-    tickers = data_features.symbol.values
-    objective_functions_dict = {
-        'f1_2008': functools.partial(drawdown_integral, pd.to_datetime('2007-11-26'), pd.to_datetime('2012-10-22'), tickers),
-        'f2_2020': functools.partial(drawdown_integral, pd.to_datetime('2020-01-01'), pd.to_datetime('2020-12-31'), tickers),
-        'f1_2022': functools.partial(drawdown_integral, pd.to_datetime('2022-01-01'), pd.to_datetime('2022-12-31'), tickers),
-        'f4_terminal': functools.partial(terminal_value, pd.to_datetime('2020-01-01'), pd.to_datetime('2024-12-31'), tickers),
-        'f5_worst_annual': functools.partial(pct_change_quantile, pd.to_datetime('2020-01-01'), pd.to_datetime('2024-12-31'), tickers, 1/13),
-        'crash': functools.partial(annualized_return, pd.to_datetime('2007-11-26'), pd.to_datetime('2012-10-22'), tickers),
-        'boom': functools.partial(annualized_return, pd.to_datetime('2020-01-01'), pd.to_datetime('2024-12-31'), tickers),
-    }
-    objective_sense = {'boom': 'max', 'crash': 'max'}
+   
+ 
+    
+
     weight_columns = [
             'dollar_ret_1p',
             'dollar_ret_6p',
@@ -442,8 +527,9 @@ def get_pareto_nav_params(
 
     # Pack the re-injection data for the problem
     # Note: Added HOLDINGS_FILE here to match your current __init__
-    problem_args = triple_threat_params + (df_stars, weight_columns, objective_functions_dict, objective_sense, xl, xu)
-
+    problem_args = triple_threat_params[:-2] + (xl, xu, df_stars)
+    
+    
     return problem_args
 
 
@@ -454,8 +540,18 @@ if __name__ == "__main__":
         'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
         'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
     }
+    tickers = np.array(xr.open_dataarray(MOMENTUM_FILE).symbol)
+    objective_functions_dict = {
+        'f1_2008': functools.partial(drawdown_integral, pd.to_datetime('2007-11-26'), pd.to_datetime('2012-10-22'), tickers),
+        'f2_2020': functools.partial(drawdown_integral, pd.to_datetime('2020-01-01'), pd.to_datetime('2020-12-31'), tickers),
+        'f1_2022': functools.partial(drawdown_integral, pd.to_datetime('2022-01-01'), pd.to_datetime('2022-12-31'), tickers),
+        'f4_terminal': functools.partial(terminal_value, pd.to_datetime('2020-01-01'), pd.to_datetime('2024-12-31'), tickers),
+        'f5_worst_annual': functools.partial(pct_change_quantile, pd.to_datetime('2020-01-01'), pd.to_datetime('2024-12-31'), tickers, 1/13),
+        'crash': functools.partial(annualized_return, pd.to_datetime('2007-11-26'), pd.to_datetime('2012-10-22'), tickers),
+        'boom': functools.partial(annualized_return, pd.to_datetime('2020-01-01'), pd.to_datetime('2024-12-31'), tickers),
+    }
 
-    problem_args = get_pareto_nav_params(periods, star_file = STAR_FILE)
+    problem_args = get_pareto_nav_params(periods, objective_functions_dict, star_file = STAR_FILE)
     xl, xu = problem_args[-2:]
 
     var_count = 17

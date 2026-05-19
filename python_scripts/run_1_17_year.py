@@ -1,3 +1,4 @@
+import functools
 import multiprocessing as mp
 import numpy as np
 import time
@@ -15,20 +16,22 @@ from pymoo.core.problem import Problem
 import multiprocessing as mp
 
 from triple_threat import *
+from pareto_navigator import mean_annual_drawdown_integral, annualized_return, pct_change_quantile, worst_annual_return
 
 # Reuse your existing classes and utilities from triple_threat.py
 # (Assuming TripleThreatProblem and RobustParallelManager are available)
 
 # --- CONFIGURATION FOR PERTURBATION ---
-PARETO_INPUT_FILE = "analysis/top_ranked.csv" # The file you extracted
-NUM_PERTURBATIONS = 10000
-NOISE_SCALE = 0.01  # 5% COEFF VAR
-NUM_WORKERS = 94
-BATCH_REQUIREMENT = 90
+TICKER_FILE = "strategy/multi_dim_stock_list.csv"
+PARETO_INPUT_FILE = 'analysis/perturbations_17_year_conservative_star.csv' # The file you extracted
+NUM_PERTURBATIONS = 9000
+NOISE_SCALE = 0  # 5% COEFF VAR
+NUM_WORKERS = 1
+BATCH_REQUIREMENT = 1
 TIMEOUT = 180
-EVAL_FILE = "s3://jdinvestment/perturbation_evaluations_5"
-HOLDINGS_FILE = "s3://jdinvestment/perturbation_holdings_5"
-PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_5"
+EVAL_FOLDER = "s3://jdinvestment/perturbation_evaluations_17_year"
+HOLDINGS_FOLDER = "s3://jdinvestment/perturbation_holdings_17_year"
+PERTURBATION_FOLDER = "s3://jdinvestment/perturbations_17_year"
 
 
 # Indices: 0-7: PCA, 8: Threshold, 9: Beta, 10-11: Decay, 12-15: Macro Weights
@@ -287,61 +290,54 @@ class HighThroughputBatchManager(Problem):
 
 
 if __name__ == "__main__":
-    print("--- DRY RUN START ---")
-    da_mom = xr.open_dataset("simulation_data/momentum.nc").to_array().squeeze()
-    da_qual = xr.open_dataset("simulation_data/quality.nc").to_array().squeeze()
-    _data_features = xr.concat([da_mom, da_qual], dim='band')
-    da_mom_gic = xr.open_dataarray("simulation_data/gic_data.nc")
-    da_qual_gic = get_gic_eps(da_mom_gic)
-    data_features = xr.concat([_data_features, xr.concat([da_mom_gic, da_qual_gic], dim='band')], dim='symbol').drop_sel(band = 'price_end')
-    
-    df_price = da_mom.sel(band='price_end').to_pandas()
-    
-    df_macro = pd.read_csv("simulation_data/macro_signals.csv", index_col=0)
-    df_macro.index = pd.to_datetime(df_macro.index)
-    
-    mapping = {'VIX_RATIO_SMOOTH': 'vix_z', 'YIELD_SPREAD_SMOOTH': 'yield_spread_z', 'HY_SPREAD_SMOOTH': 'hy_spread_z', 'FED_RATE_SMOOTH': 'fed_z'}
-    for csv_col, engine_key in mapping.items():
-        if csv_col in df_macro.columns:
-            rolling_mean = df_macro[csv_col].rolling(window=252, min_periods=1).mean()
-            rolling_std = df_macro[csv_col].rolling(window=252, min_periods=1).std()
-            df_macro[engine_key] = (df_macro[csv_col] - rolling_mean) / rolling_std.replace(0, 1)
-
-    
-    
-    dates = sorted(list(set(df_macro.index).intersection(df_price.columns)))
-    df_macro = df_macro.loc[dates, [col for col in df_macro.columns if col.endswith('z')]]
-    
-    params = {
-        'principal': [327000, 60000, 21000], 'max_frac': .05, 'feature_horizon_weeks': 104,
-        'min_price': 5, 'trade_fee': 7, 'objective_sensitivity': 0.144, 'obj_threshold': 0,
-        'start_date': pd.to_datetime('Jan 1, 2005'), 'end_date': pd.Timestamp.now()
-    }
-    
-    training_periods = {
-        'boom': {'train_start_date': pd.to_datetime('Jan 1, 2018'), 'end_date': pd.to_datetime('Jan 1, 2025')},
-        'crash': {'train_start_date': pd.to_datetime('Nov 1, 2005'), 'end_date': pd.to_datetime('Nov 1, 2012')}
+    periods = {
+        '17_year': {'train_start_date': pd.to_datetime('Jan 1, 2005'), 'val_start_date': pd.to_datetime('Jan 1, 2008'), 'end_date': pd.to_datetime('Jan 1, 2025')},
     }
 
-    print("Initializing problem kits...")
-    df_man = pd.read_csv("sim_results/manifold_triple_threat.csv")
-    mom_cols = ['dollar_ret_1p', 'dollar_ret_6p', 'dollar_ret_13p', 'dollar_ret_26p']
-    qual_cols = ['avg_eps_1q', 'avg_eps_2q', 'avg_eps_4q', 'avg_eps_8q']
+    weight_cols = [
+        'dollar_ret_1p', 'dollar_ret_6p', 'dollar_ret_13p',
+       'dollar_ret_26p', 'avg_eps_1q', 'avg_eps_2q', 'avg_eps_4q',
+       'avg_eps_8q', 'threshold', 'beta', 'mom_decay', 'qual_decay',
+       'macro_weights_0', 'macro_weights_1', 'macro_weights_2',
+       'macro_weights_3'
+    ]
     
-    df_elite = df_man.nlargest(int(len(df_man) * 0.10), 'f4_terminal')
-    m_kit = build_kit(df_elite, mom_cols)
-    q_kit = build_kit(df_elite, qual_cols)
+    
+    tickers = list(pd.read_csv(TICKER_FILE).symbol) + ['GIC']
+    objective_functions_dict = {
+        'worst_annual_return': functools.partial(worst_annual_return, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'drawdown_integral': functools.partial(mean_annual_drawdown_integral, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'annualized_return': functools.partial(annualized_return, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers),
+        'worst_annual_4wk': functools.partial(pct_change_quantile, pd.to_datetime('2008-01-01'), pd.to_datetime('2025-01-01'), tickers, 1/13),
+    }
+    objective_sense = {'drawdown_integral': 'min', 'annualized_return': 'max', 'worst_annual_4wk': 'max'}
 
-    df_ranked = pd.read_csv(PARETO_INPUT_FILE)
-    df_pareto = df_ranked.loc[df_ranked['rank']==0]
+
+    problem_args = get_triple_threat_params(
+        periods,
+        weight_cols, 
+        objective_functions_dict, 
+        objective_sense,
+        momentum_file = "simulation_data/momentum.nc", 
+        quality_file = "simulation_data/quality.nc",
+        gic_file = "simulation_data/gic_data.nc",
+        macro_file = "simulation_data/macro_signals.csv",
+        manifold_file = "sim_results/manifold_triple_threat.csv",
+        holdings_folder = HOLDINGS_FOLDER,
+        eval_folder = EVAL_FOLDER
+
+
+    )
+    xl, xu = problem_args[-2:]
+
+    df_pareto = pd.read_csv(PARETO_INPUT_FILE)
+   
     
     # Generate 10,000 samples around Pareto seeds
-    X_all, df_perturb = generate_perturbations(df_pareto,   NUM_PERTURBATIONS, XL_DEFAULT, XU_DEFAULT, NOISE_SCALE)
-    df_perturb.to_csv("{}/perturbations.csv".format(PERTURBATION_FOLDER))
+    X_all = df_pareto[weight_cols].values
     
-    
-    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, HOLDINGS_FILE, EVAL_FILE)
-    manager = HighThroughputBatchManager(num_workers = NUM_WORKERS, timeout_sec =TIMEOUT, workhorse_cls = TripleThreatProblem, workhorse_args = problem_args, target_completion = BATCH_REQUIREMENT)
+
+    manager = HighThroughputBatchManager(num_workers = NUM_WORKERS, timeout_sec =TIMEOUT, workhorse_cls = TripleThreatProblem, workhorse_args = problem_args, target_completions = BATCH_REQUIREMENT)
     
     manager.run_batch(X_all)
     

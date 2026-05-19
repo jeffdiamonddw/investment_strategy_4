@@ -111,6 +111,11 @@ from pymoo.core.problem import Problem
 STOP_SIGNAL = "STOP"
 
 
+def get_direction_sign(label):
+    """Returns -1 for 'max' and +1 for 'min'."""
+    return -1 if label.lower() == 'max' else 1 if label.lower() == 'min' else None
+
+
 # --- ADD THIS TO SATISFY PICKLE LOAD ---
 class DummyProblem(Problem):
     def __init__(self):
@@ -497,7 +502,25 @@ def build_kit(df, cols):
 
 class TripleThreatProblem(ElementwiseProblem):
    
-    def __init__(self, m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, holdings_file, eval_file, xl=XL_DEFAULT, xu=XU_DEFAULT):
+    def __init__(
+            self, 
+            m_kit, 
+            q_kit, 
+            df_macro, 
+            data_features, 
+            df_price, 
+            params, 
+            training_periods, 
+            holdings_file, 
+            eval_file, 
+            weight_columns, 
+            objective_functions_dict, 
+            objective_sense, 
+            xl=XL_DEFAULT, 
+            xu=XU_DEFAULT,
+            holdings = None
+        ):
+
         # Store these so they exist for the __getstate__ / __setstate__ logic
         self.m_kit = m_kit
         self.q_kit = q_kit
@@ -508,10 +531,15 @@ class TripleThreatProblem(ElementwiseProblem):
         self.training_periods = training_periods
         self.holdings_file = holdings_file
         self.eval_file = eval_file
+
+        self.weight_columns = weight_columns
+        self.obj_funcs = objective_functions_dict
+        self.objective_sense = objective_sense
+        self.holdings = holdings
         
         # Initialize the base engine
         self.base = RegimeSwitchingProblem(m_kit, q_kit, df_macro, data_features, 
-                                        df_price, params, training_periods, holdings_file)
+                                        df_price, params, training_periods, holdings_file, holdings = holdings)
         
         super().__init__(n_var=VAR_COUNT, n_obj=OBJ_COUNT, n_constr=0, xl=xl, xu=xu)
 
@@ -554,11 +582,12 @@ class TripleThreatProblem(ElementwiseProblem):
         qual_decay = x_numeric[11]
         macro_weights = x_numeric[12:16]/sum(abs(x_numeric[12:16]))
 
-        # SuppressOutput is removed here so you see the engine progress
-        df_h_crash = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, mom_decay, qual_decay, macro_weights, 'crash', sim_id)
-        df_h_boom = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, mom_decay, qual_decay, macro_weights, 'boom', sim_id)
         
-        df_sim = pd.concat([df_h_crash, df_h_boom]).reset_index(drop=True)
+        
+        df_sim = pd.DataFrame()
+        for key in self.training_periods:
+            df_period = self.base.run_blended_sim(w_mom, w_qual, opt_threshold, opt_beta, mom_decay, qual_decay, macro_weights, key, sim_id, holdings = self.holdings)
+            df_sim = pd.concat([df_sim, df_period]).reset_index(drop=True)
         if df_sim.empty:
             out["F"] = [9999999] * 5
             return
@@ -566,59 +595,35 @@ class TripleThreatProblem(ElementwiseProblem):
         ticker_cols = [c for c in df_sim.columns if c not in ['sim_id', 'date', 'total_value', 'pct_change']]
         df_sim['total_value'] = df_sim[ticker_cols].apply(pd.to_numeric, errors='coerce').sum(axis=1)
         
-        f1 = np.maximum(0, df_h_crash[ticker_cols].sum(axis=1).iloc[0] - df_h_crash[ticker_cols].sum(axis=1)).sum() if not df_h_crash.empty else 9999999
-        df_2020 = df_sim[(df_sim['date'] >= '2020-02-01') & (df_sim['date'] <= '2020-06-01')]
-        f2 = np.maximum(0, df_2020['total_value'].iloc[0] - df_2020['total_value']).sum() if not df_2020.empty else 9999999
-        df_2022 = df_sim[(df_sim['date'] >= '2022-01-01') & (df_sim['date'] <= '2022-12-31')]
-        f3 = np.maximum(0, df_2022['total_value'].iloc[0] - df_2022['total_value']).sum() if not df_2022.empty else 9999999
-        f4 = df_sim.iloc[-1]['total_value']
-        f5 = df_sim['total_value'].pct_change().dropna().quantile(ANNUAL_RISK_PERCENTILE)
-        f6 = df_h_crash.iloc[-1][ticker_cols].sum()
-        columns = [
-            'sim_id',
-            'f1_2008',
-            'f2_2020',
-            'f3_2022',
-            'f4_terminal',
-            'f5_annual_worst',
-            'f6_2008_terminal',
-            'dollar_ret_1p',
-            'dollar_ret_6p',
-            'dollar_ret_13p',
-            'dollar_ret_26p',
-            'avg_eps_1q',
-            'avg_eps_2q',
-            'avg_eps_4q',
-            'avg_eps_8q', 
-            'threshold', 
-            'beta',
-            'mom_decay',
-            'qual_decay',
-            'macro_weights_0',
-            'macro_weights_1',
-            'macro_weights_2',
-            'macro_weights_3'
-
-        ]
-        values = [sim_id, f1, f2, f3, f4, f5, f6] + list(x)
-        df_out = pd.DataFrame({columns[i]: [values[i]] for i in range(len(columns))})
+        out_columns = ['sim_id'] + list(self.obj_funcs.keys()) + self.weight_columns
+        obj_results = {name: func(df_sim) for name, func in self.obj_funcs.items()}
+        
+        values = [sim_id] + list(obj_results.values()) + list(x)
+        df_out = pd.DataFrame({out_columns[i]: [values[i]] for i in range(len(out_columns))})
 
         save_result_agnostic(df_out, self.eval_file)
 
+        
+        out["F"] = [get_direction_sign(self.objective_sense[key]) * obj_results[key] for key in self.objective_sense.keys()] 
 
-        out["F"] = [f1, f2, f3, -f4, -f5, -f6]
         print('time: {}'.format(time.time() - t1))
 
 
 def get_triple_threat_params(
         periods,
+        weight_columns, 
+        objective_functions_dict, 
+        objective_sense,
         momentum_file = "simulation_data/momentum.nc", 
         quality_file = "simulation_data/quality.nc",
         gic_file = "simulation_data/gic_data.nc",
         macro_file = "simulation_data/macro_signals.csv",
         manifold_file = "sim_results/manifold_triple_threat.csv",
         holdings_folder = HOLDINGS_FOLDER,
-        eval_folder = EVAL_FOLDER
+        eval_folder = EVAL_FOLDER,
+        params = None,
+        holdings = None
+        
 
 
 ):
@@ -647,11 +652,12 @@ def get_triple_threat_params(
     dates = sorted(list(set(df_macro.index).intersection(df_price.columns)))
     df_macro = df_macro.loc[dates, [col for col in df_macro.columns if col.endswith('z')]]
     
-    params = {
-        'principal': [327000, 60000, 21000], 'max_frac': .05, 'feature_horizon_weeks': 104,
-        'min_price': 5, 'trade_fee': 7, 'objective_sensitivity': 0.144, 'obj_threshold': 0,
-        'start_date': pd.to_datetime('Jan 1, 2005'), 'end_date': pd.Timestamp.now()
-    }
+    if params is None:
+        params = {
+            'principal': [327000, 60000, 21000], 'max_frac': .05, 'feature_horizon_weeks': 104,
+            'min_price': 5, 'trade_fee': 7, 'objective_sensitivity': 0.144, 'obj_threshold': 0,
+            'start_date': pd.to_datetime('Jan 1, 2005'), 'end_date': pd.Timestamp.now()
+        }
     
     
 
@@ -667,7 +673,7 @@ def get_triple_threat_params(
     
     # Pack the re-injection data for the problem
     # Note: Added HOLDINGS_FILE here to match your current __init__
-    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, training_periods, holdings_folder, eval_folder)
+    problem_args = (m_kit, q_kit, df_macro, data_features, df_price, params, periods, holdings_folder, eval_folder, weight_columns, objective_functions_dict, objective_sense, XL_DEFAULT, XU_DEFAULT, holdings)
 
     return problem_args
 
